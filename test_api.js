@@ -1,9 +1,9 @@
-// Test PipHigh API endpoints
-const API_URL = 'https://api.piphigh.com/api/v1';
+// Test inTrendFX API endpoints
+const API_URL = 'https://api.intrendfx.com/api/v1';
 
 async function testAPI() {
-  console.log('Testing PipHigh API endpoints...\n');
-  
+  console.log('Testing inTrendFX API endpoints...\n');
+
   try {
     // Test instruments endpoint
     console.log('1. Testing /instruments:');
@@ -16,7 +16,7 @@ async function testAPI() {
       console.log('Sample:', instruments[0]);
     }
     console.log('');
-    
+
     // Test prices endpoint
     console.log('2. Testing /instruments/prices/all:');
     const pricesRes = await fetch(`${API_URL}/instruments/prices/all`);
@@ -28,7 +28,7 @@ async function testAPI() {
       console.log('Sample:', prices[0]);
     }
     console.log('');
-    
+
     // Test specific price endpoint
     if (Array.isArray(instruments) && instruments.length > 0) {
       const symbol = instruments[0].symbol;
@@ -38,7 +38,7 @@ async function testAPI() {
       console.log('Status:', priceRes.status);
       console.log('Data:', price);
     }
-    
+
   } catch (error) {
     console.error('API Test Error:', error);
   }

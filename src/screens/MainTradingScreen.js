@@ -84,9 +84,9 @@ function getChartDataSource(symbol) {
 // Bootstrap script for the in-WebView chart (TradingView Charting Library).
 // Hosts the chart that web uses, with custom datafeed, broker_factory, and
 // the same entry/SL/TP horizontal_line overlay logic as
-// piphigh/frontend/trader/src/components/charts/ChartPositionOverlay.tsx.
+// intrendfx/frontend/trader/src/components/charts/ChartPositionOverlay.tsx.
 //
-// Loaded with baseUrl = https://piphigh.com/, so /charting_library/ resolves
+// Loaded with baseUrl = https://intrendfx.com/, so /charting_library/ resolves
 // to the production server where the library is already hosted.
 const CHART_BOOTSTRAP_JS = String.raw`
 (function () {
@@ -98,7 +98,7 @@ const CHART_BOOTSTRAP_JS = String.raw`
     } catch (e) {}
   }
 
-  var cfg = window.PIPHIGH_CONFIG || {};
+  var cfg = window.INTRENDFX_CONFIG || {};
   var SYMBOL    = String(cfg.symbol    || 'EURUSD').toUpperCase();
   var INTERVAL  = String(cfg.interval  || '5');
   var THEME     = (cfg.isDark ? 'Dark' : 'Light');
@@ -106,8 +106,8 @@ const CHART_BOOTSTRAP_JS = String.raw`
   var TXT       = cfg.isDark ? '#aaaaaa' : '#555555';
   var DECIMALS  = Number(cfg.decimals  || 5);
   var TOKEN     = String(cfg.token || '');
-  var API_BASE  = String(cfg.apiUrl  || 'https://api.piphigh.com/api/v1').replace(/\/+$/, '');
-  var WS_URL    = String(cfg.wsUrl   || 'wss://api.piphigh.com');
+  var API_BASE  = String(cfg.apiUrl  || 'https://api.intrendfx.com/api/v1').replace(/\/+$/, '');
+  var WS_URL    = String(cfg.wsUrl   || 'wss://api.intrendfx.com');
   var INSTRUMENTS = Array.isArray(cfg.instruments) ? cfg.instruments : [];
   var ACCOUNT   = cfg.account || null;
 
@@ -177,7 +177,7 @@ const CHART_BOOTSTRAP_JS = String.raw`
           supported_resolutions: SUPPORTED_RESOLUTIONS,
           exchanges: [
             { value: '', name: 'All', desc: 'All exchanges' },
-            { value: 'PipHigh', name: 'PipHigh', desc: 'PipHigh' },
+            { value: 'inTrendFX', name: 'inTrendFX', desc: 'inTrendFX' },
           ],
           symbols_types: [
             { name: 'All', value: '' },
@@ -205,16 +205,16 @@ const CHART_BOOTSTRAP_JS = String.raw`
         if (symbolType && typ !== symbolType) continue;
         if (q && sym.indexOf(q) === -1) continue;
         out.push({
-          symbol: sym, full_name: 'PipHigh:' + sym, ticker: sym,
+          symbol: sym, full_name: 'inTrendFX:' + sym, ticker: sym,
           description: inst.display_name || inst.name || sym,
-          exchange: 'PipHigh', type: typ,
+          exchange: 'inTrendFX', type: typ,
         });
       }
       onResult(out);
     },
 
     resolveSymbol: function (symbolName, onResolve, onError) {
-      var sym = String(symbolName || '').toUpperCase().replace(/^PIPHIGH:/, '');
+      var sym = String(symbolName || '').toUpperCase().replace(/^INTRENDFX:/, '');
       var inst = findInstrument(sym);
       var digits = inst && (inst.digits || inst.precision);
       if (!digits) digits = (sym.indexOf('JPY') >= 0) ? 3 : (isBinanceSym(sym) ? 2 : DECIMALS);
@@ -226,7 +226,7 @@ const CHART_BOOTSTRAP_JS = String.raw`
           description: (inst && (inst.display_name || inst.name)) || sym,
           type: typ,
           session: '24x7', timezone: 'Etc/UTC',
-          exchange: 'PipHigh', listed_exchange: 'PipHigh',
+          exchange: 'inTrendFX', listed_exchange: 'inTrendFX',
           format: 'price',
           pricescale: pricescale, minmov: 1,
           has_intraday: true, has_daily: true, has_weekly_and_monthly: false,
@@ -383,8 +383,8 @@ const CHART_BOOTSTRAP_JS = String.raw`
   if (WS_URL) connectWS();
 
   // Allow the RN side to push ticks too (fallback if WS is gated by network).
-  window.PIPHIGH_API = window.PIPHIGH_API || {};
-  window.PIPHIGH_API.setLiveTick = function (symbol, bid, ask) {
+  window.INTRENDFX_API = window.INTRENDFX_API || {};
+  window.INTRENDFX_API.setLiveTick = function (symbol, bid, ask) {
     var sym = String(symbol || '').toUpperCase();
     var b = +bid, a = +ask;
     var mid = (b && a) ? (b + a) / 2 : (b || a);
@@ -398,7 +398,7 @@ const CHART_BOOTSTRAP_JS = String.raw`
   var _positions = [];   // pushed from RN
   var _orders    = [];
 
-  window.PIPHIGH_API.setPositions = function (list, orders) {
+  window.INTRENDFX_API.setPositions = function (list, orders) {
     _positions = Array.isArray(list) ? list : [];
     _orders    = Array.isArray(orders) ? orders : _orders;
     pushPositionUpdates();
@@ -767,9 +767,9 @@ const CHART_BOOTSTRAP_JS = String.raw`
 
       function applyTo(doc) {
         if (!doc || !doc.head) return;
-        if (doc.getElementById('piphigh-tv-light-css')) return;
+        if (doc.getElementById('intrendfx-tv-light-css')) return;
         var s = doc.createElement('style');
-        s.id = 'piphigh-tv-light-css';
+        s.id = 'intrendfx-tv-light-css';
         s.textContent = css;
         doc.head.appendChild(s);
       }
@@ -812,22 +812,22 @@ const CHART_BOOTSTRAP_JS = String.raw`
   }
 
   // ── PUBLIC API for the React-Native side ─────────────────────────────
-  window.PIPHIGH_API.setSymbol = function (sym) {
+  window.INTRENDFX_API.setSymbol = function (sym) {
     SYMBOL = String(sym || '').toUpperCase();
     if (widgetRef && chartReady) {
       try { widgetRef.activeChart().setSymbol(SYMBOL); } catch (e) {}
     }
     syncOverlay();
   };
-  window.PIPHIGH_API.setInterval = function (i) {
+  window.INTRENDFX_API.setInterval = function (i) {
     INTERVAL = String(i || '5');
     if (widgetRef && chartReady) {
       try { widgetRef.activeChart().setResolution(INTERVAL); } catch (e) {}
     }
   };
-  window.PIPHIGH_API.setToken = function (t) { TOKEN = String(t || ''); };
-  window.PIPHIGH_API.setAccount = function (a) { ACCOUNT = a || null; };
-  window.PIPHIGH_API.refresh = function () { try { syncOverlay(); } catch (e) {} };
+  window.INTRENDFX_API.setToken = function (t) { TOKEN = String(t || ''); };
+  window.INTRENDFX_API.setAccount = function (a) { ACCOUNT = a || null; };
+  window.INTRENDFX_API.refresh = function () { try { syncOverlay(); } catch (e) {} };
 
   // Listen for posted messages too (alt path).
   function onMessage(event) {
@@ -835,10 +835,10 @@ const CHART_BOOTSTRAP_JS = String.raw`
     if (typeof data !== 'string') return;
     try {
       var msg = JSON.parse(data);
-      if (msg && msg.type === 'positions') window.PIPHIGH_API.setPositions(msg.list, msg.orders);
-      else if (msg && msg.type === 'tick') window.PIPHIGH_API.setLiveTick(msg.symbol, msg.bid, msg.ask);
-      else if (msg && msg.type === 'symbol') window.PIPHIGH_API.setSymbol(msg.symbol);
-      else if (msg && msg.type === 'token') window.PIPHIGH_API.setToken(msg.token);
+      if (msg && msg.type === 'positions') window.INTRENDFX_API.setPositions(msg.list, msg.orders);
+      else if (msg && msg.type === 'tick') window.INTRENDFX_API.setLiveTick(msg.symbol, msg.bid, msg.ask);
+      else if (msg && msg.type === 'symbol') window.INTRENDFX_API.setSymbol(msg.symbol);
+      else if (msg && msg.type === 'token') window.INTRENDFX_API.setToken(msg.token);
     } catch (e) {}
   }
   document.addEventListener('message', onMessage);
@@ -1942,7 +1942,7 @@ const HomeTab = ({ navigation }) => {
     { icon: 'bar-chart-outline', label: 'PAMM', screen: 'Pamm' },
     { icon: 'copy-outline', label: 'Copy Trading', screen: 'Social' },
     { icon: 'people-outline', label: 'Affiliates', screen: 'Business', params: { initialTab: 'ib' } },
-    { icon: 'school-outline', label: 'PipHigh Academy', screen: 'Academy' },
+    { icon: 'school-outline', label: 'inTrendFX Academy', screen: 'Academy' },
     { icon: 'newspaper-outline', label: 'Economic News', screen: 'EconomicCalendar' },
     { icon: 'calculator-outline', label: 'Risk Calculator', screen: 'RiskCalculator' },
     { icon: 'book-outline', label: 'Orders', screen: 'OrderBook' },
@@ -2179,7 +2179,7 @@ const HomeTab = ({ navigation }) => {
         {/* Logo — non-interactive */}
         <View style={{ padding: 4 }}>
           <Image
-            source={isDark ? require('../../assets/logo.png') : require('../../assets/for white mode pip-high-logo.png')}
+            source={require('../../assets/intrendfx-icon.png')}
             style={{ width: 48, height: 48, borderRadius: 10 }}
             resizeMode="contain"
           />
@@ -3141,12 +3141,12 @@ const HomeTab = ({ navigation }) => {
             >
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                 <Image
-                  source={isDark ? require('../../assets/logo.png') : require('../../assets/for white mode pip-high-logo.png')}
+                  source={require('../../assets/intrendfx-icon.png')}
                   style={{ width: 28, height: 28, borderRadius: 6 }}
                   resizeMode="contain"
                 />
                 <Text style={{ fontSize: 17, fontWeight: '800', letterSpacing: -0.3 }}>
-                  <Text style={{ color: colors.textPrimary }}>PipHigh</Text>
+                  <Text style={{ color: colors.textPrimary }}>inTrendFX</Text>
                   <Text style={{ color: colors.primary }}>FX</Text>
                 </Text>
               </View>
@@ -5837,7 +5837,7 @@ const ChartTab = ({ route }) => {
   const chartBg = isDark ? '#121212' : '#ffffff';
 
   // ── Single chart: TradingView Charting Library (loaded from web's host).
-  // Loaded with baseUrl https://piphigh.com/ so /charting_library/* resolves
+  // Loaded with baseUrl https://intrendfx.com/ so /charting_library/* resolves
   // to the production server where the library is already hosted.
   const chartWebViewRef = useRef(null);
   const [chartJwt, setChartJwt] = useState('');
@@ -5958,7 +5958,7 @@ new TradingView.widget({
   // Push position + order updates into the chart WebView (no remount).
   useEffect(() => {
     if (!chartWebViewRef.current) return;
-    const js = `window.PIPHIGH_API && window.PIPHIGH_API.setPositions(${JSON.stringify(positionsForChart)}, ${JSON.stringify(ordersForChart)}); true;`;
+    const js = `window.INTRENDFX_API && window.INTRENDFX_API.setPositions(${JSON.stringify(positionsForChart)}, ${JSON.stringify(ordersForChart)}); true;`;
     try { chartWebViewRef.current.injectJavaScript(js); } catch (e) {}
   }, [positionsForChart, ordersForChart]);
 
@@ -5966,14 +5966,14 @@ new TradingView.widget({
   useEffect(() => {
     if (!chartWebViewRef.current) return;
     if (!currentPrice.bid && !currentPrice.ask) return;
-    const js = `window.PIPHIGH_API && window.PIPHIGH_API.setLiveTick(${JSON.stringify(activeSymbol)}, ${currentPrice.bid || 0}, ${currentPrice.ask || 0}); true;`;
+    const js = `window.INTRENDFX_API && window.INTRENDFX_API.setLiveTick(${JSON.stringify(activeSymbol)}, ${currentPrice.bid || 0}, ${currentPrice.ask || 0}); true;`;
     try { chartWebViewRef.current.injectJavaScript(js); } catch (e) {}
   }, [activeSymbol, currentPrice.bid, currentPrice.ask]);
 
   // Push token / account changes without remounting.
   useEffect(() => {
     if (!chartWebViewRef.current || !chartJwt) return;
-    const js = `window.PIPHIGH_API && window.PIPHIGH_API.setToken(${JSON.stringify(chartJwt)}); true;`;
+    const js = `window.INTRENDFX_API && window.INTRENDFX_API.setToken(${JSON.stringify(chartJwt)}); true;`;
     try { chartWebViewRef.current.injectJavaScript(js); } catch (e) {}
   }, [chartJwt]);
 
@@ -5983,8 +5983,8 @@ new TradingView.widget({
       const msg = JSON.parse(event?.nativeEvent?.data || '{}');
       if (msg.type === 'ready' && chartWebViewRef.current) {
         const js = `
-          window.PIPHIGH_API && window.PIPHIGH_API.setToken(${JSON.stringify(chartJwt)});
-          window.PIPHIGH_API && window.PIPHIGH_API.setPositions(${JSON.stringify(positionsForChart)}, ${JSON.stringify(ordersForChart)});
+          window.INTRENDFX_API && window.INTRENDFX_API.setToken(${JSON.stringify(chartJwt)});
+          window.INTRENDFX_API && window.INTRENDFX_API.setPositions(${JSON.stringify(positionsForChart)}, ${JSON.stringify(ordersForChart)});
           true;`;
         try { chartWebViewRef.current.injectJavaScript(js); } catch (e) {}
       } else if (msg.type === 'orderPlaced' || msg.type === 'positionClosed' || msg.type === 'bracketUpdated' || msg.type === 'orderCancelled') {

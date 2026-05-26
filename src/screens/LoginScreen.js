@@ -156,11 +156,11 @@ const LoginScreen = ({ navigation }) => {
         {/* Logo */}
         <View style={styles.logoContainer}>
           <Image 
-            source={require('../../assets/for white mode pip-high-logo.png')}
+            source={require('../../assets/intrendfx-logo-light.png')}
             style={styles.logoImage}
             resizeMode="contain"
           />
-          <Text style={styles.brandName}>PipHigh</Text>
+          <Text style={styles.brandName}>inTrendFX</Text>
         </View>
 
         {/* Tab Switcher */}

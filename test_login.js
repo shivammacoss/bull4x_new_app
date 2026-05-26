@@ -1,9 +1,9 @@
-// Test PipHigh Login API
-const API_URL = 'https://api.piphigh.com/api/v1';
+// Test inTrendFX Login API
+const API_URL = 'https://api.intrendfx.com/api/v1';
 
 async function testLogin() {
-  console.log('Testing PipHigh Login API...\n');
-  
+  console.log('Testing inTrendFX Login API...\n');
+
   try {
     // Test login endpoint
     console.log('1. Testing /auth/login:');
@@ -11,7 +11,7 @@ async function testLogin() {
       email: 'test@example.com', // Replace with actual test email
       password: 'testpassword123' // Replace with actual test password
     };
-    
+
     const response = await fetch(`${API_URL}/auth/login`, {
       method: 'POST',
       headers: {
@@ -19,11 +19,11 @@ async function testLogin() {
       },
       body: JSON.stringify(loginData)
     });
-    
+
     console.log('Status:', response.status);
     const data = await response.json();
     console.log('Response:', data);
-    
+
     if (response.ok) {
       console.log('\n✅ Login successful!');
       console.log('Access Token:', data.access_token ? 'Received' : 'Missing');
@@ -33,7 +33,7 @@ async function testLogin() {
     } else {
       console.log('\n❌ Login failed:', data.detail || data.message);
     }
-    
+
   } catch (error) {
     console.error('Test Error:', error.message);
   }

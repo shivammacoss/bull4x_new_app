@@ -38,7 +38,7 @@ export default {
     liveNews: 'Noticias en Vivo', calendar: 'Calendario',
   },
   academy: {
-    title: 'Academia PipHigh', subtitle: 'Domine el Trading de Forex de Principiante a Profesional',
+    title: 'Academia inTrendFX', subtitle: 'Domine el Trading de Forex de Principiante a Profesional',
     phases: 'Fases', modules: 'Módulos', completed: 'Completado', studyTime: 'Tiempo de Estudio',
     progress: 'Progreso', startPhase: 'Iniciar Fase', continuePhase: 'Continuar', locked: 'Bloqueado',
     quiz: 'Cuestionario', beginQuiz: 'Iniciar Cuestionario', questionOf: 'Pregunta {current} de {total}',

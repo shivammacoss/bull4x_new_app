@@ -102,7 +102,7 @@ export default {
 
   // Academy
   academy: {
-    title: 'PipHigh Academy',
+    title: 'inTrendFX Academy',
     subtitle: 'Master Forex Trading from Beginner to Professional',
     phases: 'Phases',
     modules: 'Modules',

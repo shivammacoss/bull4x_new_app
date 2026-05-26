@@ -93,7 +93,7 @@ export default {
     calendar: 'कैलेंडर',
   },
   academy: {
-    title: 'PipHigh अकादमी',
+    title: 'inTrendFX अकादमी',
     subtitle: 'शुरुआत से प्रोफेशनल तक फॉरेक्स ट्रेडिंग सीखें',
     phases: 'चरण',
     modules: 'मॉड्यूल',

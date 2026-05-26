@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "PipHigh",
-    "slug": "piphigh",
+    "name": "inTrendFX",
+    "slug": "intrendfx",
     "version": "1.0.0",
     "runtimeVersion": "1.0.0",
     "orientation": "portrait",
@@ -10,13 +10,13 @@
     "newArchEnabled": true,
     "jsEngine": "hermes",
     "splash": {
-      "image": "./assets/for white mode pip-high-logo.png",
+      "image": "./assets/intrendfx-logo.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff",
       "dark": {
-        "image": "./assets/logo.png",
+        "image": "./assets/intrendfx-logo.png",
         "resizeMode": "contain",
-        "backgroundColor": "#121212"
+        "backgroundColor": "#ffffff"
       }
     },
     "updates": {
@@ -34,7 +34,7 @@
           "NSAllowsArbitraryLoads": false,
           "NSAllowsLocalNetworking": true,
           "NSExceptionDomains": {
-            "piphigh.com": {
+            "intrendfx.com": {
               "NSIncludesSubdomains": true,
               "NSExceptionAllowsInsecureHTTPLoads": false,
               "NSExceptionRequiresForwardSecrecy": true,
@@ -43,7 +43,7 @@
           }
         }
       },
-      "bundleIdentifier": "com.piphigh.app"
+      "bundleIdentifier": "com.intrendfx.app"
     },
     "android": {
       "adaptiveIcon": {
@@ -51,20 +51,20 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.piphigh.app",
+      "package": "com.intrendfx.app",
       "splash": {
-        "image": "./assets/for white mode pip-high-logo.png",
+        "image": "./assets/intrendfx-logo.png",
         "resizeMode": "contain",
         "backgroundColor": "#ffffff",
         "dark": {
-          "image": "./assets/logo.png",
+          "image": "./assets/intrendfx-logo.png",
           "resizeMode": "contain",
-          "backgroundColor": "#121212"
+          "backgroundColor": "#ffffff"
         }
       }
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/intrendfx-favicon.png"
     },
     "plugins": [
       "expo-font",
