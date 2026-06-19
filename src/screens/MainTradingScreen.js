@@ -35,6 +35,7 @@ import { useSettings } from '../context/SettingsContext';
 import socketService from '../services/socketService';
 import { getJsonAuthHeaders } from '../utils/authHeaders';
 import { authedFetch } from '../utils/authedFetch';
+import { currencySymbol } from '../utils/currency';
 import {
   extractInstrumentRows,
   extractPriceRows,
@@ -988,9 +989,31 @@ const TradingProvider = ({ children, navigation, route }) => {
   const [accountSummary, setAccountSummary] = useState({
     balance: 0, equity: 0, credit: 0, freeMargin: 0, usedMargin: 0, floatingPnl: 0
   });
+  // USD -> account-currency rate for the active account (1 for USD accounts).
+  // Used to convert client-side computed P&L into the account's currency (e.g. INR).
+  const [acctFxRate, setAcctFxRate] = useState(1);
   const [marketWatchNews, setMarketWatchNews] = useState([]);
   const [loadingNews, setLoadingNews] = useState(true);
   const [currentMainTab, setCurrentMainTab] = useState('Home'); // Track current tab for notifications
+
+  // Keep the USD->account-currency rate in sync with the selected account.
+  // USD accounts stay at 1; INR accounts fetch the live rate so client-side P&L
+  // can be shown in INR (the backend already returns balance/equity in INR).
+  useEffect(() => {
+    const cur = String(selectedAccount?.currency || 'USD').toUpperCase();
+    if (cur !== 'INR') { setAcctFxRate(1); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authedFetch('/wallet/fx-rate');
+        if (!res.ok) return;
+        const data = await res.json().catch(() => ({}));
+        const rate = Number(data?.rate || data?.usd_inr || 0);
+        if (!cancelled && rate > 0) setAcctFxRate(rate);
+      } catch (_) {}
+    })();
+    return () => { cancelled = true; };
+  }, [selectedAccount?.currency]);
 
   useEffect(() => {
     loadUser();
@@ -1348,7 +1371,8 @@ const TradingProvider = ({ children, navigation, route }) => {
           
           const trigger = closed.trigger || closed.closedBy || closed.reason || 'Manual';
           const pnlValue = Number(closed.pnl || 0);
-          const pnlText = pnlValue >= 0 ? `+$${pnlValue.toFixed(2)}` : `-$${Math.abs(pnlValue).toFixed(2)}`;
+          const _sym = currencySymbol(selectedAccount?.currency);
+          const pnlText = pnlValue >= 0 ? `+${_sym}${pnlValue.toFixed(2)}` : `-${_sym}${Math.abs(pnlValue).toFixed(2)}`;
           console.log(`[Trade Close] Showing alert for ${closed.symbol} - ${trigger}`);
           
           // Determine alert title and message based on trigger type
@@ -1633,9 +1657,12 @@ const TradingProvider = ({ children, navigation, route }) => {
     const openPrice = trade.openPrice || trade.open_price || 0;
     const quantity = trade.lots || trade.quantity || 0;
     const contractSize = trade.contract_size || trade.contractSize || 100000;
-    const pnl = side === 'BUY'
+    const rawPnlUsd = side === 'BUY'
       ? (currentPrice - openPrice) * quantity * contractSize
       : (openPrice - currentPrice) * quantity * contractSize;
+    // Convert the price P&L into the account currency (INR accounts: × fx rate).
+    // Commission/swap are already stored in the account currency by the backend.
+    const pnl = rawPnlUsd * (Number(acctFxRate) || 1);
     return pnl - (trade.commission || 0) - (trade.swap || 0);
   };
 
@@ -1763,6 +1790,8 @@ const TradingProvider = ({ children, navigation, route }) => {
       openTrades, pendingOrders, tradeHistory, instruments, livePrices, adminSpreads,
       loading, accountSummary, totalFloatingPnl, realTimeEquity, realTimeFreeMargin, todayPnl,
       realTimeDailyDD, realTimeOverallDD, realTimeProfit,
+      acctFxRate,
+      activeCurrency: String((isChallengeMode ? selectedChallengeAccount : selectedAccount)?.currency || 'USD').toUpperCase(),
       fetchOpenTrades, fetchPendingOrders, fetchTradeHistory, fetchAccountSummary,
       refreshAccounts, calculatePnl, logout, setInstruments,
       marketWatchNews, loadingNews, fetchMarketWatchNews,
@@ -1940,7 +1969,7 @@ const HomeTab = ({ navigation }) => {
     { icon: 'receipt-outline', label: 'Transactions', screen: 'TransactionHistory' },
     { icon: 'pie-chart-outline', label: 'Portfolio', screen: 'Portfolio' },
     { icon: 'bar-chart-outline', label: 'PAMM', screen: 'Pamm' },
-    { icon: 'copy-outline', label: 'Copy Trading', screen: 'Social' },
+    { icon: 'copy-outline', label: 'Copy Trading', screen: 'CopyTrade' },
     { icon: 'people-outline', label: 'Affiliates', screen: 'Business', params: { initialTab: 'ib' } },
     { icon: 'school-outline', label: 'inTrendFX Academy', screen: 'Academy' },
     { icon: 'newspaper-outline', label: 'Economic News', screen: 'EconomicCalendar' },
@@ -1962,52 +1991,23 @@ const HomeTab = ({ navigation }) => {
         if (!token || !mounted) return;
         const headers = { Authorization: `Bearer ${token}` };
 
-        // Wallet + accounts + notifications in parallel
-        const [wRes, aRes, nRes] = await Promise.all([
+        // Wallet + notifications in parallel (accounts come from ctx.accounts).
+        const [wRes, nRes] = await Promise.all([
           fetch(`${API_URL}/wallet/summary`, { headers }),
-          fetch(`${API_URL}/accounts`, { headers }),
           fetch(`${API_URL}/notifications?page=1&per_page=50`, { headers }),
         ]);
 
         if (!mounted) return;
 
         const wData = wRes.ok ? await wRes.json().catch(() => ({})) : {};
-        const aData = aRes.ok ? await aRes.json().catch(() => ({})) : {};
         const nData = nRes.ok ? await nRes.json().catch(() => ({})) : {};
 
-        console.log('[Wallet] summary response:', JSON.stringify(wData));
-
-        // Try multiple field names from /wallet/summary
-        let bal = wData.main_wallet_balance ?? wData.wallet_balance ?? wData.main_balance ?? wData.balance ?? wData.total;
-
-        // If /wallet/summary didn't return balance, try /wallet/{userId}
-        // API sometimes returns strings like "0" or "100.50" — coerce to Number
-        if (bal == null || Number(bal) === 0 || Number.isNaN(Number(bal))) {
-          try {
-            const userData = await SecureStore.getItemAsync('user');
-            if (userData) {
-              const user = JSON.parse(userData);
-              const userId = user._id || user.id;
-              if (userId) {
-                const wRes2 = await fetch(`${API_URL}/wallet/${userId}`, { headers });
-                if (wRes2.ok) {
-                  const wData2 = await wRes2.json().catch(() => ({}));
-                  console.log('[Wallet] /wallet/:id response:', JSON.stringify(wData2));
-                  const walletObj = wData2.wallet || wData2;
-                  bal = walletObj.main_wallet_balance ?? walletObj.wallet_balance ?? walletObj.balance ?? bal;
-                }
-              }
-            }
-          } catch (_) {}
-        }
-
-        // Final fallback: derive from account totals
-        if (bal == null || Number(bal) === 0 || Number.isNaN(Number(bal))) {
-          const acctList = Array.isArray(aData.items) ? aData.items : (Array.isArray(aData) ? aData : []);
-          const acctTotal = acctList.reduce((s, a) => s + Number(a?.balance || 0), 0);
-          if (acctTotal > 0) bal = acctTotal;
-        }
-        if (mounted) setWalletBal(Math.max(0, Number(bal) || 0));
+        // Main wallet balance is the authoritative `main_wallet_balance` from
+        // /wallet/summary. Do NOT fall back to summing trading-account balances:
+        // that inflates the wallet figure so the UI lets you start a transfer
+        // the backend then rejects with "Insufficient main wallet balance".
+        const bal = Number(wData.main_wallet_balance || 0);
+        if (mounted) setWalletBal(Math.max(0, Number.isNaN(bal) ? 0 : bal));
 
         const list = nData.items || nData.notifications || [];
         const count = Array.isArray(list)
@@ -2130,6 +2130,16 @@ const HomeTab = ({ navigation }) => {
       Alert.alert('Success', `Transferred $${amt.toFixed(2)}`);
       setTransferAmount('');
       if (ctx.refreshAccounts) await ctx.refreshAccounts();
+      // Refresh main wallet balance so the UI reflects the new figure immediately.
+      try {
+        const wRes = await fetch(`${API_URL}/wallet/summary`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (wRes.ok) {
+          const wData = await wRes.json().catch(() => ({}));
+          setWalletBal(Math.max(0, Number(wData.main_wallet_balance || 0)));
+        }
+      } catch (_) {}
     } catch (e) {
       Alert.alert('Transfer failed', e?.message || 'Please try again');
     } finally {
@@ -2148,7 +2158,11 @@ const HomeTab = ({ navigation }) => {
     return 'Live Account';
   };
 
-  const fmtMoney = (n) => `$${(Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const fmtMoney = (n, currency = 'USD') => {
+    const v = Number(n) || 0;
+    const sym = String(currency || 'USD').toUpperCase() === 'INR' ? '₹' : '$';
+    return `${v < 0 ? '-' : ''}${sym}${Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
 
   if (ctx.loading) {
     return (
@@ -2503,7 +2517,7 @@ const HomeTab = ({ navigation }) => {
                               Balance
                             </Text>
                             <Text style={{ fontSize: 15, fontWeight: '800', color: colors.textPrimary }}>
-                              {fmtMoney(balance)}
+                              {fmtMoney(balance, row.currency)}
                             </Text>
                           </View>
                           <View style={{ width: '50%' }}>
@@ -2511,7 +2525,7 @@ const HomeTab = ({ navigation }) => {
                               Equity
                             </Text>
                             <Text style={{ fontSize: 15, fontWeight: '800', color: colors.textPrimary }}>
-                              {fmtMoney(equity)}
+                              {fmtMoney(equity, row.currency)}
                             </Text>
                           </View>
                           <View style={{ width: '50%' }}>
@@ -2519,7 +2533,7 @@ const HomeTab = ({ navigation }) => {
                               P&amp;L
                             </Text>
                             <Text style={{ fontSize: 15, fontWeight: '800', color: pnlPos ? colors.primary : colors.error }}>
-                              ~ {pnlPos ? '+' : ''}{fmtMoney(pnl)}
+                              ~ {pnlPos ? '+' : ''}{fmtMoney(pnl, row.currency)}
                             </Text>
                             <Text style={{ fontSize: 10, fontWeight: '700', marginTop: 1, color: pnlPos ? colors.primary + 'b0' : colors.error + 'b0' }}>
                               ({pnlPos ? '+' : ''}{pct.toFixed(2)}%)
@@ -2558,7 +2572,7 @@ const HomeTab = ({ navigation }) => {
                               Free Margin
                             </Text>
                             <Text style={{ fontSize: 14, fontWeight: '700', color: colors.textPrimary }}>
-                              {fmtMoney(row.free_margin)}
+                              {fmtMoney(row.free_margin, row.currency)}
                             </Text>
                           </View>
                           <View style={{ width: '50%' }}>
@@ -4116,7 +4130,7 @@ const QuotesTab = ({ navigation }) => {
                         </View>
                       </View>
                       <View style={styles.accountPickerItemRight}>
-                        <Text style={[styles.accountPickerBalance, { color: colors.textPrimary }]}>${(account.balance || 0).toFixed(2)}</Text>
+                        <Text style={[styles.accountPickerBalance, { color: colors.textPrimary }]}>{currencySymbol(account.currency)}{(account.balance || 0).toFixed(2)}</Text>
                         {!ctx.isChallengeMode && (ctx.selectedAccount?.id === account.id || ctx.selectedAccount?._id === account._id) && (
                           <Ionicons name="checkmark-circle" size={20} color={colors.accent} />
                         )}
@@ -4150,7 +4164,7 @@ const QuotesTab = ({ navigation }) => {
                         </View>
                       </View>
                       <View style={styles.accountPickerItemRight}>
-                        <Text style={[styles.accountPickerBalance, { color: colors.textPrimary }]}>${(account.currentBalance || account.balance || 0).toFixed(2)}</Text>
+                        <Text style={[styles.accountPickerBalance, { color: colors.textPrimary }]}>{currencySymbol(account.currency)}{(account.currentBalance || account.balance || 0).toFixed(2)}</Text>
                         {ctx.isChallengeMode && (ctx.selectedChallengeAccount?.id === account.id || ctx.selectedChallengeAccount?._id === account._id) && (
                           <Ionicons name="checkmark-circle" size={20} color="#1a73e8" />
                         )}
@@ -4307,14 +4321,15 @@ const TradeTab = () => {
     return getFilteredHistory().reduce((sum, trade) => sum + (trade.realizedPnl || 0), 0);
   };
 
-  // Calculate PnL for a trade
+  // Calculate PnL for a trade (converted into the account currency for INR).
   const calculatePnl = (trade) => {
     const prices = ctx.livePrices[trade.symbol];
     if (!prices?.bid || !prices?.ask) return 0;
     const currentPrice = trade.side === 'BUY' ? prices.bid : prices.ask;
-    return trade.side === 'BUY'
+    const rawUsd = trade.side === 'BUY'
       ? (currentPrice - trade.openPrice) * trade.quantity * trade.contractSize
       : (trade.openPrice - currentPrice) * trade.quantity * trade.contractSize;
+    return rawUsd * (Number(ctx.acctFxRate) || 1);
   };
 
   // Open partial close modal
@@ -4353,7 +4368,7 @@ const TradeTab = () => {
       if (res.ok) {
         const pnl = data.profit || 0;
         const label = closeLots ? `Partial close (${closeLots} lots)` : 'Closed';
-        toast?.showToast(`${label}! P/L: $${pnl.toFixed(2)}`, pnl >= 0 ? 'success' : 'warning');
+        toast?.showToast(`${label}! P/L: ${currencySymbol(ctx.activeCurrency)}${pnl.toFixed(2)}`, pnl >= 0 ? 'success' : 'warning');
         ctx.fetchOpenTrades();
         ctx.fetchTradeHistory();
         ctx.fetchAccountSummary();
@@ -4666,19 +4681,21 @@ const TradeTab = () => {
 
   const equityColor = ctx.realTimeEquity >= balanceVal ? '#22c55e' : '#ef4444';
   const freeMarginColor = '#22c55e';
+  const curSym = currencySymbol(ctx.activeCurrency);
+  const fmtSym = (n) => `${n < 0 ? '-' : ''}${curSym}${Math.abs(Number(n) || 0).toFixed(2)}`;
 
   return (
     <View style={[styles.tradeDashRoot, { backgroundColor: colors.bgPrimary }]}>
       {/* Account Stats - Compact vertical list */}
       <View style={{ paddingTop: 44, backgroundColor: colors.bgPrimary }}>
         {[
-          { label: 'Balance', value: balanceVal.toFixed(2), color: colors.textPrimary },
-          { label: 'Equity', value: ctx.realTimeEquity.toFixed(2), color: equityColor },
-          { label: 'Credit', value: creditVal.toFixed(2), color: colors.textPrimary },
-          { label: 'Used Margin', value: totalUsedMargin.toFixed(2), color: colors.textPrimary },
-          { label: 'Free Margin', value: ctx.realTimeFreeMargin.toFixed(2), color: freeMarginColor },
-          { label: 'Floating PL', value: `${floatPl >= 0 ? '' : ''}${floatPl.toFixed(2)}`, color: floatColor },
-          { label: "Today's P&L", value: `${todayPnlVal >= 0 ? '' : ''}${todayPnlVal.toFixed(2)}`, color: todayPnlColor },
+          { label: 'Balance', value: fmtSym(balanceVal), color: colors.textPrimary },
+          { label: 'Equity', value: fmtSym(ctx.realTimeEquity), color: equityColor },
+          { label: 'Credit', value: fmtSym(creditVal), color: colors.textPrimary },
+          { label: 'Used Margin', value: fmtSym(totalUsedMargin), color: colors.textPrimary },
+          { label: 'Free Margin', value: fmtSym(ctx.realTimeFreeMargin), color: freeMarginColor },
+          { label: 'Floating PL', value: fmtSym(floatPl), color: floatColor },
+          { label: "Today's P&L", value: fmtSym(todayPnlVal), color: todayPnlColor },
         ].map((item, idx) => (
           <View key={idx} style={{
             flexDirection: 'row',
@@ -4854,7 +4871,7 @@ const TradeTab = () => {
                             fontSize: 15,
                             fontWeight: '800',
                           }}>
-                            ${pnl >= 0 ? '' : ''}{pnl.toFixed(2)}
+                            {currencySymbol(ctx.activeCurrency)}{pnl.toFixed(2)}
                           </Text>
                           <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 1 }}>
                             {currentPrice?.toFixed(5) || '—'}
@@ -4941,7 +4958,7 @@ const TradeTab = () => {
               </ScrollView>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 8 }}>
                 <Text style={{ color: colors.textMuted, fontSize: 12 }}>{getFilteredHistory().length} trades</Text>
-                <Text style={{ color: getHistoryTotalPnl() >= 0 ? '#22c55e' : '#ef4444', fontSize: 13, fontWeight: '700' }}>P&L: ${getHistoryTotalPnl().toFixed(2)}</Text>
+                <Text style={{ color: getHistoryTotalPnl() >= 0 ? '#22c55e' : '#ef4444', fontSize: 13, fontWeight: '700' }}>P&L: {currencySymbol(ctx.activeCurrency)}{getHistoryTotalPnl().toFixed(2)}</Text>
               </View>
             </View>
 
@@ -4984,7 +5001,7 @@ const TradeTab = () => {
                       fontSize: 16,
                       fontWeight: '800',
                     }}>
-                      {(trade.realizedPnl || 0) >= 0 ? '+' : ''}${(trade.realizedPnl || 0).toFixed(2)}
+                      {(trade.realizedPnl || 0) >= 0 ? '+' : ''}{currencySymbol(ctx.activeCurrency)}{(trade.realizedPnl || 0).toFixed(2)}
                     </Text>
                   </View>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
@@ -5104,7 +5121,7 @@ const TradeTab = () => {
                   <View style={{ alignItems: 'flex-end' }}>
                     <Text style={{ color: colors.textMuted, fontSize: 11 }}>Floating P&L</Text>
                     <Text style={{ color: calculatePnl(partialCloseTrade) >= 0 ? '#22c55e' : '#ef4444', fontSize: 16, fontWeight: '700' }}>
-                      {calculatePnl(partialCloseTrade) >= 0 ? '+' : ''}${calculatePnl(partialCloseTrade).toFixed(2)}
+                      {calculatePnl(partialCloseTrade) >= 0 ? '+' : ''}{currencySymbol(ctx.activeCurrency)}{calculatePnl(partialCloseTrade).toFixed(2)}
                     </Text>
                   </View>
                 </View>
@@ -5259,7 +5276,7 @@ const TradeTab = () => {
                   <Text style={[styles.detailSectionTitle, { color: '#ef4444' }]}>Charges</Text>
                   <View style={[styles.detailRow, { borderBottomColor: colors.border }]}>
                     <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Margin Used</Text>
-                    <Text style={[styles.detailValue, { color: colors.textPrimary }]}>${detailTrade.marginUsed?.toFixed(2)}</Text>
+                    <Text style={[styles.detailValue, { color: colors.textPrimary }]}>{currencySymbol(ctx.activeCurrency)}{detailTrade.marginUsed?.toFixed(2)}</Text>
                   </View>
                   <View style={[styles.detailRow, { borderBottomColor: colors.border }]}>
                     <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Spread</Text>
@@ -5267,11 +5284,11 @@ const TradeTab = () => {
                   </View>
                   <View style={[styles.detailRow, { borderBottomColor: colors.border }]}>
                     <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Commission</Text>
-                    <Text style={[styles.detailValue, { color: colors.textPrimary }]}>${detailTrade.commission?.toFixed(2) || '0.00'}</Text>
+                    <Text style={[styles.detailValue, { color: colors.textPrimary }]}>{currencySymbol(ctx.activeCurrency)}{detailTrade.commission?.toFixed(2) || '0.00'}</Text>
                   </View>
                   <View style={[styles.detailRow, { borderBottomColor: colors.border }]}>
                     <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Swap</Text>
-                    <Text style={[styles.detailValue, { color: colors.textPrimary }]}>${detailTrade.swap?.toFixed(2) || '0.00'}</Text>
+                    <Text style={[styles.detailValue, { color: colors.textPrimary }]}>{currencySymbol(ctx.activeCurrency)}{detailTrade.swap?.toFixed(2) || '0.00'}</Text>
                   </View>
                 </View>
 
@@ -5281,7 +5298,7 @@ const TradeTab = () => {
                   <View style={[styles.detailRow, { borderBottomColor: colors.border }]}>
                     <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Floating P&L</Text>
                     <Text style={[styles.detailValue, { color: ctx.calculatePnl(detailTrade) >= 0 ? '#22c55e' : '#ef4444', fontWeight: 'bold' }]}>
-                      ${ctx.calculatePnl(detailTrade).toFixed(2)}
+                      {currencySymbol(ctx.activeCurrency)}{ctx.calculatePnl(detailTrade).toFixed(2)}
                     </Text>
                   </View>
                 </View>
@@ -5451,7 +5468,7 @@ const TradeTab = () => {
                   <Text style={[styles.detailSectionTitle, { color: '#ef4444' }]}>Charges</Text>
                   <View style={[styles.detailRow, { borderBottomColor: colors.border }]}>
                     <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Margin Used</Text>
-                    <Text style={[styles.detailValue, { color: colors.textPrimary }]}>${historyDetailTrade.marginUsed?.toFixed(2) || '0.00'}</Text>
+                    <Text style={[styles.detailValue, { color: colors.textPrimary }]}>{currencySymbol(ctx.activeCurrency)}{historyDetailTrade.marginUsed?.toFixed(2) || '0.00'}</Text>
                   </View>
                   <View style={[styles.detailRow, { borderBottomColor: colors.border }]}>
                     <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Spread</Text>
@@ -5459,11 +5476,11 @@ const TradeTab = () => {
                   </View>
                   <View style={[styles.detailRow, { borderBottomColor: colors.border }]}>
                     <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Commission</Text>
-                    <Text style={[styles.detailValue, { color: colors.textPrimary }]}>${historyDetailTrade.commission?.toFixed(2) || '0.00'}</Text>
+                    <Text style={[styles.detailValue, { color: colors.textPrimary }]}>{currencySymbol(ctx.activeCurrency)}{historyDetailTrade.commission?.toFixed(2) || '0.00'}</Text>
                   </View>
                   <View style={[styles.detailRow, { borderBottomColor: colors.border }]}>
                     <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Swap</Text>
-                    <Text style={[styles.detailValue, { color: colors.textPrimary }]}>${historyDetailTrade.swap?.toFixed(2) || '0.00'}</Text>
+                    <Text style={[styles.detailValue, { color: colors.textPrimary }]}>{currencySymbol(ctx.activeCurrency)}{historyDetailTrade.swap?.toFixed(2) || '0.00'}</Text>
                   </View>
                 </View>
 
@@ -5473,7 +5490,7 @@ const TradeTab = () => {
                   <View style={[styles.detailRow, { borderBottomColor: colors.border }]}>
                     <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Realized P&L</Text>
                     <Text style={[styles.detailValue, { color: (historyDetailTrade.realizedPnl || 0) >= 0 ? '#22c55e' : '#ef4444', fontWeight: 'bold', fontSize: 18 }]}>
-                      {(historyDetailTrade.realizedPnl || 0) >= 0 ? '+' : ''}${(historyDetailTrade.realizedPnl || 0).toFixed(2)}
+                      {(historyDetailTrade.realizedPnl || 0) >= 0 ? '+' : ''}{currencySymbol(ctx.activeCurrency)}{(historyDetailTrade.realizedPnl || 0).toFixed(2)}
                     </Text>
                   </View>
                 </View>
@@ -5551,7 +5568,7 @@ const HistoryTab = () => {
               )}
             </View>
             <Text style={[styles.historyPnl, { color: (item.realizedPnl || 0) >= 0 ? '#22c55e' : '#ef4444' }]}>
-              {(item.realizedPnl || 0) >= 0 ? '+' : ''}${(item.realizedPnl || 0).toFixed(2)}
+              {(item.realizedPnl || 0) >= 0 ? '+' : ''}{currencySymbol(ctx.activeCurrency)}{(item.realizedPnl || 0).toFixed(2)}
             </Text>
           </View>
           <View style={styles.historyMeta}>
@@ -6466,7 +6483,6 @@ const MoreTab = ({ navigation }) => {
   const menuItems = [
     { icon: 'book-outline', label: 'Orders', screen: 'OrderBook', isTab: false, color: colors.primary },
     { icon: 'wallet-outline', label: 'Wallet', screen: 'Wallet', isTab: false, color: colors.primary },
-    { icon: 'bar-chart-outline', label: 'PAMM / MAM', screen: 'Pamm', isTab: false, color: '#06b6d4' },
     { icon: 'calculator-outline', label: 'Risk Calculator', screen: 'RiskCalculator', isTab: false, color: '#f59e0b' },
     { icon: 'calendar-outline', label: 'Economic Calendar', screen: 'EconomicCalendar', isTab: false, color: '#ef4444' },
     { icon: 'school-outline', label: 'Academy', screen: 'Academy', isTab: false, color: '#2196f3' },

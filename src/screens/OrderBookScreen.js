@@ -14,10 +14,12 @@ import * as SecureStore from 'expo-secure-store';
 import { API_URL } from '../config';
 import { useTheme } from '../context/ThemeContext';
 import socketService from '../services/socketService';
+import { currencySymbol } from '../utils/currency';
 
 const OrderBookScreen = ({ navigation }) => {
   const { colors, isDark } = useTheme();
   const [accounts, setAccounts] = useState([]);
+  const [usdInrRate, setUsdInrRate] = useState(1);
   const [selectedAccount, setSelectedAccount] = useState('all');
   const [activeTab, setActiveTab] = useState('positions');
   const [loading, setLoading] = useState(true);
@@ -55,12 +57,28 @@ const OrderBookScreen = ({ navigation }) => {
       });
       const accountsData = await accountsRes.json();
       const items = accountsData.items || accountsData || [];
-      const mapped = items.map(a => ({
+      const isActive = (a) => {
+        if (a.is_active === false || a.isActive === false) return false;
+        const s = String(a.status || '').toLowerCase();
+        return s !== 'deleted' && s !== 'closed' && s !== 'inactive';
+      };
+      const mapped = items.filter(isActive).map(a => ({
         ...a,
         _id: a.id || a._id,
         accountId: a.account_number || a.accountId || a.id,
+        currency: a.currency || 'USD',
       }));
       setAccounts(mapped);
+
+      // USD->INR rate for converting client-computed P&L on INR accounts.
+      try {
+        const fxRes = await fetch(`${API_URL}/wallet/fx-rate`, { headers: { 'Authorization': `Bearer ${token}` } });
+        if (fxRes.ok) {
+          const fxData = await fxRes.json().catch(() => ({}));
+          const r = Number(fxData?.rate || fxData?.usd_inr || 0);
+          if (r > 0) setUsdInrRate(r);
+        }
+      } catch (_) {}
 
       // Fetch positions & history for all accounts
       await fetchAllTradesForAccounts(mapped, token);
@@ -115,6 +133,7 @@ const OrderBookScreen = ({ navigation }) => {
               contractSize: p.contract_size || 100000,
               accountName: acct.accountId,
               accountId: acct._id,
+              currency: acct.currency || 'USD',
               createdAt: p.created_at,
             }));
           })
@@ -137,6 +156,7 @@ const OrderBookScreen = ({ navigation }) => {
               takeProfit: o.take_profit,
               accountName: acct.accountId,
               accountId: acct._id,
+              currency: acct.currency || 'USD',
               createdAt: o.created_at,
             }));
           })
@@ -163,6 +183,7 @@ const OrderBookScreen = ({ navigation }) => {
           openedAt: t.opened_at,
           closedAt: t.close_time || t.closed_at,
           accountName: '',
+          currency: (accountsList.find(a => a._id === (t.account_id || t.accountId))?.currency) || 'USD',
         }));
       }
 
@@ -206,10 +227,15 @@ const OrderBookScreen = ({ navigation }) => {
     if (!currentPrice) return 0;
 
     const contractSize = trade.contractSize || getContractSize(trade.symbol);
-    const pnl = trade.side === 'BUY'
+    let pnl = trade.side === 'BUY'
       ? (currentPrice - trade.openPrice) * trade.quantity * contractSize
       : (trade.openPrice - currentPrice) * trade.quantity * contractSize;
 
+    // Client-side price P&L is in USD; convert to INR for INR accounts.
+    if (String(trade.currency || 'USD').toUpperCase() === 'INR') {
+      pnl = pnl * (Number(usdInrRate) || 1);
+    }
+    // Commission/swap are already in the account currency.
     return pnl - (trade.commission || 0) - (trade.swap || 0);
   };
 

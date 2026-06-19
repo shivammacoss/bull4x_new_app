@@ -18,9 +18,26 @@ import { API_URL } from '../config';
 import { useTheme } from '../context/ThemeContext';
 import { authedFetch } from '../utils/authedFetch';
 import { isKycApproved, showKycGate, fetchKycStatus } from '../utils/kycGate';
+import { fmtMoney, fmtSigned } from '../utils/currency';
 
 function isDemoAccount(a) {
   return !!(a?.is_demo || a?.isDemo || a?.accountTypeId?.isDemo);
+}
+
+// Account-open flow currencies (mirrors web AccountTypePickerModal). The backend
+// converts the min deposit / virtual balance into the chosen currency via FX.
+const OPEN_CURRENCIES = [
+  { code: 'USD', label: 'US Dollar', symbol: '$', flag: '🇺🇸' },
+  { code: 'INR', label: 'Indian Rupee', symbol: '₹', flag: '🇮🇳' },
+];
+
+/** Common leverage tiers up to (and including) a group's max. */
+function leverageTiers(max) {
+  const common = [1, 2, 5, 10, 25, 50, 100, 200, 300, 400, 500, 1000];
+  const m = Number(max) || 100;
+  const tiers = common.filter((v) => v <= m);
+  if (!tiers.includes(m)) tiers.push(m);
+  return tiers.sort((a, b) => a - b);
 }
 
 function isActiveStatus(a) {
@@ -65,6 +82,13 @@ const AccountsScreen = ({ navigation, route }) => {
   const [groupsLoading, setGroupsLoading] = useState(false);
   const [selectedGroupId, setSelectedGroupId] = useState(null);
   const [openingAccount, setOpeningAccount] = useState(false);
+  // Multi-step open flow: type -> currency -> leverage (mirrors web)
+  const [openStep, setOpenStep] = useState('type');
+  const [chosenCurrency, setChosenCurrency] = useState('USD');
+  const [chosenLeverage, setChosenLeverage] = useState(null);
+  // Live / Demo mode toggle (mirrors web acctMode). Demo opens skip the KYC gate
+  // and are auto-funded with virtual balance by the backend.
+  const [acctMode, setAcctMode] = useState('live');
 
   // Delete account state
   const [deletingAccountId, setDeletingAccountId] = useState(null);
@@ -510,14 +534,16 @@ const AccountsScreen = ({ navigation, route }) => {
     setIsTransferring(false);
   };
 
-  // Fetch available account groups for new account creation
-  const fetchAccountGroups = async () => {
+  // Fetch available account groups for new account creation. Demo mode asks the
+  // backend for demo-only groups (is_demo=true), matching the web picker.
+  const fetchAccountGroups = async (isDemo = false) => {
     setGroupsLoading(true);
     try {
       const token = await SecureStore.getItemAsync('token');
-      const res = await fetch(`${API_URL}/accounts/available-groups`, {
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
+      const res = await fetch(
+        `${API_URL}/accounts/available-groups?is_demo=${isDemo ? 'true' : 'false'}`,
+        { headers: { 'Authorization': `Bearer ${token}` } },
+      );
       const data = await res.json().catch(() => ({}));
       const items = data.items || data || [];
       setGroups(Array.isArray(items) ? items : []);
@@ -529,23 +555,35 @@ const AccountsScreen = ({ navigation, route }) => {
   };
 
   const openNewAccountModal = async () => {
-    // Always re-check KYC status here so the gate stays accurate even if the
-    // user lingered on this screen long enough for an admin decision to land.
-    const fresh = await fetchKycStatus();
-    setKycStatus(fresh);
-    if (!isKycApproved(fresh)) {
-      showKycGate(navigation, fresh);
-      return;
+    const demo = acctMode === 'demo';
+    // Live accounts require approved KYC. Demo accounts skip the gate (matches web).
+    if (!demo) {
+      // Re-check KYC so the gate stays accurate even if the user lingered long
+      // enough for an admin decision to land.
+      const fresh = await fetchKycStatus();
+      setKycStatus(fresh);
+      if (!isKycApproved(fresh)) {
+        showKycGate(navigation, fresh);
+        return;
+      }
     }
     setSelectedGroupId(null);
+    setOpenStep('type');
+    setChosenCurrency('USD');
+    setChosenLeverage(null);
     setShowOpenModal(true);
-    await fetchAccountGroups();
+    await fetchAccountGroups(demo);
   };
 
-  // Create new trading account (matches web POST /accounts/open)
+  // Create new trading account (matches web POST /accounts/open — sends the
+  // chosen currency so the backend can open an INR or USD account with FX).
   const handleOpenAccount = async () => {
     if (!selectedGroupId) {
       Alert.alert('Account type', 'Please select an account type');
+      return;
+    }
+    if (!chosenLeverage) {
+      Alert.alert('Leverage', 'Please select a leverage');
       return;
     }
     setOpeningAccount(true);
@@ -554,14 +592,22 @@ const AccountsScreen = ({ navigation, route }) => {
       const res = await fetch(`${API_URL}/accounts/open`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ account_group_id: selectedGroupId }),
+        body: JSON.stringify({
+          account_group_id: selectedGroupId,
+          leverage: chosenLeverage,
+          currency: chosenCurrency,
+          is_demo: acctMode === 'demo',
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setShowOpenModal(false);
         setSelectedGroupId(null);
+        setOpenStep('type');
+        setChosenLeverage(null);
         await fetchAccounts();
-        Alert.alert('Success', `Account ${data.account_number || 'created'} opened`);
+        const kind = acctMode === 'demo' ? 'Demo' : chosenCurrency;
+        Alert.alert('Success', `${kind} account ${data.account_number || 'created'} opened`);
       } else {
         Alert.alert('Error', data.detail || data.message || 'Could not open account');
       }
@@ -634,8 +680,11 @@ const AccountsScreen = ({ navigation, route }) => {
     );
   }
 
-  // Show all active accounts (demo + live), like web
-  const mainTradingAccounts = accounts.filter((a) => isActiveStatus(a));
+  // Active accounts split by Live / Demo (mirrors web acctMode tabs).
+  const activeAccounts = accounts.filter((a) => isActiveStatus(a));
+  const liveAccountsList = activeAccounts.filter((a) => !isDemoAccount(a));
+  const demoAccountsList = activeAccounts.filter((a) => isDemoAccount(a));
+  const mainTradingAccounts = acctMode === 'demo' ? demoAccountsList : liveAccountsList;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bgPrimary }]}>
@@ -655,6 +704,35 @@ const AccountsScreen = ({ navigation, route }) => {
         style={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />}
       >
+        {/* Live / Demo segmented toggle (mirrors web) */}
+        <View style={{ flexDirection: 'row', backgroundColor: colors.bgSecondary, borderRadius: 12, padding: 4, marginBottom: 14 }}>
+          {[
+            { key: 'live', label: 'Live Accounts', count: liveAccountsList.length },
+            { key: 'demo', label: 'Demo Accounts', count: demoAccountsList.length },
+          ].map((t) => {
+            const active = acctMode === t.key;
+            const activeColor = t.key === 'demo' ? colors.warning : colors.success;
+            return (
+              <TouchableOpacity
+                key={t.key}
+                activeOpacity={0.85}
+                onPress={() => setAcctMode(t.key)}
+                style={{
+                  flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+                  paddingVertical: 10, borderRadius: 9,
+                  backgroundColor: active ? activeColor + '22' : 'transparent',
+                  borderWidth: active ? 1 : 0, borderColor: active ? activeColor : 'transparent',
+                }}
+              >
+                <Text style={{ color: active ? activeColor : colors.textMuted, fontSize: 13, fontWeight: '700' }}>{t.label}</Text>
+                <View style={{ minWidth: 20, paddingHorizontal: 6, paddingVertical: 1, borderRadius: 10, backgroundColor: active ? activeColor + '33' : colors.bgCard }}>
+                  <Text style={{ color: active ? activeColor : colors.textMuted, fontSize: 11, fontWeight: '700', textAlign: 'center' }}>{t.count}</Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
         {/* New Account button — full width dashed (matches web) */}
         <TouchableOpacity
           onPress={openNewAccountModal}
@@ -668,20 +746,24 @@ const AccountsScreen = ({ navigation, route }) => {
             borderRadius: 14,
             borderWidth: 2,
             borderStyle: 'dashed',
-            borderColor: colors.success,
+            borderColor: acctMode === 'demo' ? colors.warning : colors.success,
             backgroundColor: 'transparent',
             marginBottom: 16,
           }}
         >
-          <Ionicons name="add" size={20} color={colors.success} />
-          <Text style={{ color: colors.success, fontSize: 15, fontWeight: '700' }}>New Account</Text>
+          <Ionicons name="add" size={20} color={acctMode === 'demo' ? colors.warning : colors.success} />
+          <Text style={{ color: acctMode === 'demo' ? colors.warning : colors.success, fontSize: 15, fontWeight: '700' }}>
+            {acctMode === 'demo' ? 'New Demo Account' : 'New Account'}
+          </Text>
         </TouchableOpacity>
 
         {mainTradingAccounts.length === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons name="briefcase-outline" size={64} color={colors.textMuted} />
-            <Text style={[styles.emptyTitle, { color: colors.textPrimary }]}>No trading account</Text>
-            <Text style={[styles.emptyText, { color: colors.textMuted }]}>Tap "+ New Account" above to open one.</Text>
+            <Text style={[styles.emptyTitle, { color: colors.textPrimary }]}>No {acctMode === 'demo' ? 'demo' : 'live'} account</Text>
+            <Text style={[styles.emptyText, { color: colors.textMuted }]}>
+              Tap "+ {acctMode === 'demo' ? 'New Demo Account' : 'New Account'}" above to open one.
+            </Text>
           </View>
         ) : (
           mainTradingAccounts.map((account) => {
@@ -696,6 +778,7 @@ const AccountsScreen = ({ navigation, route }) => {
             const equity = Number(account.equity || balance + credit);
             const pnl = equity - balance - credit;
             const pnlPct = balance > 0 ? (pnl / balance) * 100 : 0;
+            const acctCur = account.currency || 'USD';
             const lev = String(account.leverage || '').includes(':')
               ? account.leverage
               : `1:${account.leverage || 100}`;
@@ -794,13 +877,13 @@ const AccountsScreen = ({ navigation, route }) => {
                     <View style={{ flex: 1 }}>
                       <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 4 }}>Balance</Text>
                       <Text style={{ color: colors.textPrimary, fontSize: 18, fontWeight: '800' }}>
-                        ${balance.toFixed(2)}
+                        {fmtMoney(balance, acctCur)}
                       </Text>
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 4 }}>Equity</Text>
                       <Text style={{ color: colors.textPrimary, fontSize: 18, fontWeight: '800' }}>
-                        ${equity.toFixed(2)}
+                        {fmtMoney(equity, acctCur)}
                       </Text>
                     </View>
                   </View>
@@ -816,7 +899,7 @@ const AccountsScreen = ({ navigation, route }) => {
                           color={pnl >= 0 ? colors.success : colors.error}
                         />
                         <Text style={{ color: pnl >= 0 ? colors.success : colors.error, fontSize: 14, fontWeight: '700' }}>
-                          {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+                          {fmtSigned(pnl, acctCur)}
                         </Text>
                       </View>
                       <Text style={{ color: pnl >= 0 ? colors.success : colors.error, fontSize: 11, marginTop: 2 }}>
@@ -859,7 +942,7 @@ const AccountsScreen = ({ navigation, route }) => {
                     <View style={{ marginTop: 14 }}>
                       <Text style={{ color: colors.textMuted, fontSize: 11 }}>Free margin</Text>
                       <Text style={{ color: colors.textPrimary, fontSize: 13, fontWeight: '700', marginTop: 4 }}>
-                        ${(account.free_margin != null ? Number(account.free_margin) : 0).toFixed(2)}
+                        {fmtMoney(account.free_margin != null ? Number(account.free_margin) : 0, acctCur)}
                       </Text>
                     </View>
 
@@ -1208,85 +1291,204 @@ const AccountsScreen = ({ navigation, route }) => {
           <TouchableOpacity style={styles.modalBackdrop} onPress={() => setShowOpenModal(false)} />
           <View style={[styles.transferModalContent, { backgroundColor: colors.bgCard, maxHeight: '85%' }]}>
             <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>Open New Account</Text>
+              <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>
+                {openStep === 'type' ? (acctMode === 'demo' ? 'Open Demo Account' : 'Open New Account') : openStep === 'currency' ? 'Select Currency' : 'Select Leverage'}
+              </Text>
               <TouchableOpacity onPress={() => setShowOpenModal(false)}>
                 <Ionicons name="close" size={24} color={colors.textMuted} />
               </TouchableOpacity>
             </View>
 
-            {groupsLoading ? (
-              <ActivityIndicator color={colors.accent} style={{ marginVertical: 30 }} />
-            ) : groups.length === 0 ? (
-              <View style={{ paddingVertical: 30, alignItems: 'center' }}>
-                <Ionicons name="alert-circle-outline" size={40} color={colors.textMuted} />
-                <Text style={{ color: colors.textMuted, marginTop: 10, fontSize: 13 }}>No account types available</Text>
-              </View>
-            ) : (
-              <ScrollView style={{ maxHeight: 380 }}>
-                {groups.map((g) => {
-                  const selected = selectedGroupId === g.id;
+            {/* Step 1: account type */}
+            {openStep === 'type' && (
+              groupsLoading ? (
+                <ActivityIndicator color={colors.accent} style={{ marginVertical: 30 }} />
+              ) : groups.length === 0 ? (
+                <View style={{ paddingVertical: 30, alignItems: 'center' }}>
+                  <Ionicons name="alert-circle-outline" size={40} color={colors.textMuted} />
+                  <Text style={{ color: colors.textMuted, marginTop: 10, fontSize: 13 }}>No account types available</Text>
+                </View>
+              ) : (
+                <>
+                  <ScrollView style={{ maxHeight: 360 }}>
+                    {groups.map((g) => {
+                      const selected = selectedGroupId === g.id;
+                      return (
+                        <TouchableOpacity
+                          key={g.id}
+                          onPress={() => setSelectedGroupId(g.id)}
+                          activeOpacity={0.85}
+                          style={{
+                            borderRadius: 12,
+                            borderWidth: selected ? 2 : 1,
+                            borderColor: selected ? colors.accent : colors.border,
+                            backgroundColor: selected ? colors.accent + '15' : colors.bgSecondary,
+                            padding: 14,
+                            marginBottom: 10,
+                          }}
+                        >
+                          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ color: colors.textPrimary, fontSize: 15, fontWeight: '700' }}>{g.name}</Text>
+                              {g.description ? (
+                                <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 4 }} numberOfLines={2}>
+                                  {g.description}
+                                </Text>
+                              ) : null}
+                            </View>
+                            {selected && <Ionicons name="checkmark-circle" size={22} color={colors.accent} />}
+                          </View>
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }}>
+                            <View>
+                              <Text style={{ color: colors.textMuted, fontSize: 10 }}>Min Deposit</Text>
+                              <Text style={{ color: colors.textPrimary, fontSize: 12, fontWeight: '700', marginTop: 2 }}>${g.minimum_deposit ?? 0}</Text>
+                            </View>
+                            <View>
+                              <Text style={{ color: colors.textMuted, fontSize: 10 }}>Leverage</Text>
+                              <Text style={{ color: colors.textPrimary, fontSize: 12, fontWeight: '700', marginTop: 2 }}>1:{g.leverage_default ?? 100}</Text>
+                            </View>
+                            <View>
+                              <Text style={{ color: colors.textMuted, fontSize: 10 }}>Commission</Text>
+                              <Text style={{ color: colors.textPrimary, fontSize: 12, fontWeight: '700', marginTop: 2 }}>${g.commission_per_lot ?? 0}/lot</Text>
+                            </View>
+                            {g.swap_free ? (
+                              <View>
+                                <Text style={{ color: colors.textMuted, fontSize: 10 }}>Swap</Text>
+                                <Text style={{ color: colors.success, fontSize: 12, fontWeight: '700', marginTop: 2 }}>Free</Text>
+                              </View>
+                            ) : null}
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+
+                  <TouchableOpacity
+                    style={[styles.transferSubmitBtn, !selectedGroupId && styles.btnDisabled]}
+                    onPress={() => { if (selectedGroupId) setOpenStep('currency'); }}
+                    disabled={!selectedGroupId}
+                  >
+                    <Text style={styles.transferSubmitBtnText}>Continue</Text>
+                  </TouchableOpacity>
+                </>
+              )
+            )}
+
+            {/* Step 2: currency (USD / INR) */}
+            {openStep === 'currency' && (
+              <>
+                <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 12, lineHeight: 18 }}>
+                  Your account balance, P&L and margin will show in this currency. Market prices stay the same.
+                </Text>
+                {OPEN_CURRENCIES.map((c) => {
+                  const sel = chosenCurrency === c.code;
                   return (
                     <TouchableOpacity
-                      key={g.id}
-                      onPress={() => setSelectedGroupId(g.id)}
+                      key={c.code}
+                      onPress={() => setChosenCurrency(c.code)}
                       activeOpacity={0.85}
                       style={{
-                        borderRadius: 12,
-                        borderWidth: selected ? 2 : 1,
-                        borderColor: selected ? colors.accent : colors.border,
-                        backgroundColor: selected ? colors.accent + '15' : colors.bgSecondary,
-                        padding: 14,
-                        marginBottom: 10,
+                        flexDirection: 'row', alignItems: 'center', borderRadius: 12,
+                        borderWidth: sel ? 2 : 1, borderColor: sel ? colors.accent : colors.border,
+                        backgroundColor: sel ? colors.accent + '15' : colors.bgSecondary,
+                        padding: 14, marginBottom: 10,
                       }}
                     >
-                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ color: colors.textPrimary, fontSize: 15, fontWeight: '700' }}>{g.name}</Text>
-                          {g.description ? (
-                            <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 4 }} numberOfLines={2}>
-                              {g.description}
-                            </Text>
-                          ) : null}
-                        </View>
-                        {selected && <Ionicons name="checkmark-circle" size={22} color={colors.accent} />}
+                      <Text style={{ fontSize: 26, marginRight: 12 }}>{c.flag}</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: colors.textPrimary, fontSize: 15, fontWeight: '700' }}>
+                          {c.code} <Text style={{ color: colors.textMuted, fontWeight: '400' }}>{c.symbol}</Text>
+                        </Text>
+                        <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>{c.label}</Text>
                       </View>
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }}>
-                        <View>
-                          <Text style={{ color: colors.textMuted, fontSize: 10 }}>Min Deposit</Text>
-                          <Text style={{ color: colors.textPrimary, fontSize: 12, fontWeight: '700', marginTop: 2 }}>${g.minimum_deposit ?? 0}</Text>
-                        </View>
-                        <View>
-                          <Text style={{ color: colors.textMuted, fontSize: 10 }}>Leverage</Text>
-                          <Text style={{ color: colors.textPrimary, fontSize: 12, fontWeight: '700', marginTop: 2 }}>1:{g.leverage_default ?? 100}</Text>
-                        </View>
-                        <View>
-                          <Text style={{ color: colors.textMuted, fontSize: 10 }}>Commission</Text>
-                          <Text style={{ color: colors.textPrimary, fontSize: 12, fontWeight: '700', marginTop: 2 }}>${g.commission_per_lot ?? 0}/lot</Text>
-                        </View>
-                        {g.swap_free ? (
-                          <View>
-                            <Text style={{ color: colors.textMuted, fontSize: 10 }}>Swap</Text>
-                            <Text style={{ color: colors.success, fontSize: 12, fontWeight: '700', marginTop: 2 }}>Free</Text>
-                          </View>
-                        ) : null}
-                      </View>
+                      {sel && <Ionicons name="checkmark-circle" size={22} color={colors.accent} />}
                     </TouchableOpacity>
                   );
                 })}
-              </ScrollView>
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 6 }}>
+                  <TouchableOpacity
+                    style={[styles.transferSubmitBtn, { flex: 1, backgroundColor: colors.bgSecondary }]}
+                    onPress={() => setOpenStep('type')}
+                  >
+                    <Text style={[styles.transferSubmitBtnText, { color: colors.textPrimary }]}>Back</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.transferSubmitBtn, { flex: 1 }]}
+                    onPress={() => {
+                      const g = groups.find((x) => x.id === selectedGroupId);
+                      setChosenLeverage(g?.leverage_default ?? 100);
+                      setOpenStep('leverage');
+                    }}
+                  >
+                    <Text style={styles.transferSubmitBtnText}>Continue</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
             )}
 
-            <TouchableOpacity
-              style={[styles.transferSubmitBtn, (openingAccount || !selectedGroupId) && styles.btnDisabled]}
-              onPress={handleOpenAccount}
-              disabled={openingAccount || !selectedGroupId}
-            >
-              {openingAccount ? (
-                <ActivityIndicator color="#000" />
-              ) : (
-                <Text style={styles.transferSubmitBtnText}>Open Account</Text>
-              )}
-            </TouchableOpacity>
+            {/* Step 3: leverage */}
+            {openStep === 'leverage' && (() => {
+              const g = groups.find((x) => x.id === selectedGroupId);
+              const tiers = leverageTiers(g?.leverage_default);
+              return (
+                <>
+                  <View style={{ borderRadius: 12, borderWidth: 1, borderColor: colors.accent + '40', backgroundColor: colors.accent + '0c', padding: 12, marginBottom: 14 }}>
+                    <Text style={{ color: colors.textPrimary, fontWeight: '700', fontSize: 14 }}>{g?.name}</Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 4 }}>
+                      Currency: <Text style={{ color: colors.textPrimary, fontWeight: '700' }}>{chosenCurrency}</Text>
+                      {'  ·  '}Max: <Text style={{ color: colors.textPrimary, fontWeight: '700' }}>1:{g?.leverage_default ?? 100}</Text>
+                    </Text>
+                  </View>
+                  <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 10, lineHeight: 18 }}>
+                    Higher leverage increases both potential profit and risk. You can change it later when no positions are open.
+                  </Text>
+                  <ScrollView style={{ maxHeight: 200 }}>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                      {tiers.map((lev) => {
+                        const sel = chosenLeverage === lev;
+                        const isMax = lev === (g?.leverage_default ?? 100);
+                        return (
+                          <TouchableOpacity
+                            key={lev}
+                            onPress={() => setChosenLeverage(lev)}
+                            style={{
+                              width: '31%', paddingVertical: 12, borderRadius: 10,
+                              borderWidth: sel ? 2 : 1, borderColor: sel ? colors.accent : colors.border,
+                              backgroundColor: sel ? colors.accent + '15' : colors.bgSecondary, alignItems: 'center',
+                            }}
+                          >
+                            <Text style={{ color: sel ? colors.accent : colors.textPrimary, fontWeight: '700' }}>1:{lev}</Text>
+                            {isMax ? <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }}>MAX</Text> : null}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </ScrollView>
+                  <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+                    <TouchableOpacity
+                      style={[styles.transferSubmitBtn, { flex: 1, backgroundColor: colors.bgSecondary }]}
+                      onPress={() => setOpenStep('currency')}
+                      disabled={openingAccount}
+                    >
+                      <Text style={[styles.transferSubmitBtnText, { color: colors.textPrimary }]}>Back</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.transferSubmitBtn, { flex: 1.5 }, (openingAccount || !chosenLeverage) && styles.btnDisabled]}
+                      onPress={handleOpenAccount}
+                      disabled={openingAccount || !chosenLeverage}
+                    >
+                      {openingAccount ? (
+                        <ActivityIndicator color="#000" />
+                      ) : (
+                        <Text style={styles.transferSubmitBtnText}>
+                          {acctMode === 'demo' ? 'Open Demo Account' : `Open ${chosenCurrency} Account`}
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </>
+              );
+            })()}
           </View>
         </View>
       </Modal>

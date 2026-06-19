@@ -91,15 +91,20 @@ class ApiService {
     return this.request('/social/my-copies');
   }
 
-  async followProvider(providerId, settings) {
-    return this.request('/social/follow', {
+  // Copy a master: amount-based allocation. Backend takes query params.
+  async followProvider(masterId, accountId, amount) {
+    const query = new URLSearchParams({
+      master_id: masterId,
+      account_id: accountId,
+      amount,
+    }).toString();
+    return this.request(`/social/copy?${query}`, {
       method: 'POST',
-      body: JSON.stringify({ provider_id: providerId, ...settings }),
     });
   }
 
-  async unfollowProvider(copyId) {
-    return this.request(`/social/unfollow/${copyId}`, {
+  async unfollowProvider(allocationId) {
+    return this.request(`/social/copy/${allocationId}`, {
       method: 'DELETE',
     });
   }
@@ -259,10 +264,15 @@ class ApiService {
     return this.request('/accounts/available-groups');
   }
 
-  async openAccount(accountGroupId) {
+  async openAccount(accountGroupId, { currency = 'USD', leverage = null, isDemo = false } = {}) {
     return this.request('/accounts/open', {
       method: 'POST',
-      body: JSON.stringify({ account_group_id: accountGroupId }),
+      body: JSON.stringify({
+        account_group_id: accountGroupId,
+        currency,
+        ...(leverage != null && { leverage }),
+        is_demo: isDemo,
+      }),
     });
   }
 
@@ -379,22 +389,26 @@ class ApiService {
 
   // Social Trading - TrustEdge format
   async getMasters() {
-    return this.request('/social/masters');
+    return this.request('/social/leaderboard?sort_by=total_return_pct&page=1&per_page=50');
   }
 
   async getMySubscriptions() {
-    return this.request('/social/subscriptions');
+    return this.request('/social/my-copies');
   }
 
-  async followMaster(data) {
-    return this.request('/social/follow', {
+  async followMaster(masterId, accountId, amount) {
+    const query = new URLSearchParams({
+      master_id: masterId,
+      account_id: accountId,
+      amount,
+    }).toString();
+    return this.request(`/social/copy?${query}`, {
       method: 'POST',
-      body: JSON.stringify(data),
     });
   }
 
-  async unfollowMaster(subscriptionId) {
-    return this.request(`/social/unfollow/${subscriptionId}`, {
+  async unfollowMaster(allocationId) {
+    return this.request(`/social/copy/${allocationId}`, {
       method: 'DELETE',
     });
   }

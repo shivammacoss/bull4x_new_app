@@ -16,6 +16,39 @@ import * as SecureStore from 'expo-secure-store';
 import { API_URL } from '../config';
 import { useTheme } from '../context/ThemeContext';
 
+// Backend (gateway /social) shapes -> UI shapes. The copy model is amount-based:
+// you invest a capital amount into a master via POST /social/copy.
+const normalizeMaster = (m) => ({
+  ...m,
+  _id: m.id,
+  id: m.id,
+  displayName: m.provider_name || 'Trader',
+  approvedCommissionPercentage: Number(m.performance_fee_pct || 0),
+  minInvestment: Number(m.min_investment || 0),
+  isCopying: !!m.is_copying,
+  totalReturnPct: Number(m.total_return_pct || 0),
+  maxDrawdownPct: Number(m.max_drawdown_pct || 0),
+  stats: { activeFollowers: Number(m.followers_count || 0) },
+});
+
+const normalizeSubscription = (s) => ({
+  ...s,
+  _id: s.id,                    // allocation id — used for unfollow (DELETE /social/copy/{id})
+  masterTraderId: s.master_id,  // used by isFollowingMaster()
+  masterId: { displayName: s.provider_name || 'Trader' },
+  status: String(s.status || '').toUpperCase(),
+  copyMode: 'AMOUNT',
+  copyValue: Number(s.allocation_amount || 0),
+  stats: {
+    totalCopiedTrades: (s.open_trades || 0) + (s.closed_trades || 0),
+    openTrades: s.open_trades || 0,
+    closedTrades: s.closed_trades || 0,
+    totalProfit: Math.max(0, Number(s.total_profit || 0)),
+    totalLoss: Math.max(0, -Number(s.total_profit || 0)),
+    netPnl: Number(s.total_profit || 0),
+  },
+});
+
 const CopyTradeScreen = ({ navigation }) => {
   const { colors, isDark } = useTheme();
   const [user, setUser] = useState(null);
@@ -32,6 +65,7 @@ const CopyTradeScreen = ({ navigation }) => {
   const [selectedAccount, setSelectedAccount] = useState(null);
   const [copyMode, setCopyMode] = useState('FIXED_LOT');
   const [copyValue, setCopyValue] = useState('0.01');
+  const [copyAmount, setCopyAmount] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [loadingMasters, setLoadingMasters] = useState(false);
@@ -112,13 +146,13 @@ const CopyTradeScreen = ({ navigation }) => {
     setLoadingMasters(true);
     try {
       const token = await SecureStore.getItemAsync('token');
-      const res = await fetch(`${API_URL}/social/masters`, {
+      const res = await fetch(`${API_URL}/social/leaderboard?sort_by=total_return_pct&page=1&per_page=50`, {
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
       });
       if (!res.ok) { setMasters([]); setLoadingMasters(false); return; }
       const data = await res.json();
-      const mastersList = data.items || data.masters || data || [];
-      setMasters(Array.isArray(mastersList) ? mastersList : []);
+      const list = Array.isArray(data.items) ? data.items : [];
+      setMasters(list.map(normalizeMaster));
     } catch (e) {
       console.warn('Error fetching masters:', e.message);
     }
@@ -129,12 +163,13 @@ const CopyTradeScreen = ({ navigation }) => {
     try {
       const token = await SecureStore.getItemAsync('token');
       if (!token) return;
-      const res = await fetch(`${API_URL}/social/subscriptions`, {
+      const res = await fetch(`${API_URL}/social/my-copies`, {
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
       });
       if (!res.ok) { setMySubscriptions([]); return; }
       const data = await res.json();
-      setMySubscriptions(data.items || data.subscriptions || data || []);
+      const items = Array.isArray(data.items) ? data.items : [];
+      setMySubscriptions(items.map(normalizeSubscription));
     } catch (e) {
       console.error('Error fetching subscriptions:', e);
     }
@@ -190,7 +225,15 @@ const CopyTradeScreen = ({ navigation }) => {
       if (!res.ok) return;
       const data = await res.json();
       if (data && (data.id || data._id)) {
-        setMyMasterProfile({ ...data, _id: data.id || data._id });
+        setMyMasterProfile({
+          ...data,
+          _id: data.id || data._id,
+          displayName: data.display_name || data.provider_name || 'My Master Account',
+          status: String(data.status || '').toUpperCase(),
+          approvedCommissionPercentage: Number(data.performance_fee_pct || 0),
+          rejectionReason: data.rejection_reason || data.rejectionReason,
+          stats: { activeFollowers: Number(data.followers_count ?? data.active_investors ?? 0) },
+        });
       }
     } catch (e) {
       // User is not a master - that's okay
@@ -198,34 +241,52 @@ const CopyTradeScreen = ({ navigation }) => {
   };
 
   const fetchMyFollowers = async () => {
-    // TrustEdge doesn't have a dedicated followers endpoint
-    setMyFollowers([]);
+    try {
+      const token = await SecureStore.getItemAsync('token');
+      if (!token) return;
+      const res = await fetch(`${API_URL}/followers/my-followers`, {
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
+      });
+      if (!res.ok) { setMyFollowers([]); return; }
+      const data = await res.json();
+      const list = Array.isArray(data.followers) ? data.followers : [];
+      setMyFollowers(list.map(f => ({
+        ...f,
+        _id: f.id,
+        followerUserId: { firstName: f.user_name || f.user_email, lastName: '', email: f.user_email },
+        copyMode: 'AMOUNT',
+        copyValue: Number(f.allocation_amount || 0),
+        status: String(f.status || '').toUpperCase(),
+      })));
+    } catch (e) {
+      console.warn('Error fetching followers:', e.message);
+      setMyFollowers([]);
+    }
   };
 
   const handleApplyMaster = async () => {
-    const accountId = masterForm.tradingAccountId || (accounts.length > 0 ? accounts[0]._id : '');
-    
     if (!masterForm.displayName.trim()) {
       Alert.alert('Error', 'Please enter a display name');
-      return;
-    }
-    if (!accountId) {
-      Alert.alert('Error', 'Please select a trading account');
       return;
     }
 
     setApplyingMaster(true);
     try {
       const token = await SecureStore.getItemAsync('token');
-      const res = await fetch(`${API_URL}/social/become-provider`, {
+      // Backend become-provider takes query params; it auto-creates a dedicated
+      // master account (no account_id needed). Fee is capped at 50%.
+      const fee = Math.min(50, parseFloat(masterForm.requestedCommissionPercentage) || 20);
+      const desc = masterForm.description || masterForm.displayName || '';
+      const params = [
+        `master_type=signal_provider`,
+        `description=${encodeURIComponent(desc)}`,
+        `performance_fee_pct=${encodeURIComponent(fee)}`,
+        `min_investment=100`,
+        `max_investors=100`,
+      ];
+      const res = await fetch(`${API_URL}/social/become-provider?${params.join('&')}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({
-          display_name: masterForm.displayName,
-          description: masterForm.description,
-          account_id: accountId,
-          commission_percentage: parseFloat(masterForm.requestedCommissionPercentage) || 10
-        })
       });
 
       const data = await res.json();
@@ -247,40 +308,42 @@ const CopyTradeScreen = ({ navigation }) => {
       Alert.alert('Error', 'Please select a trading account');
       return;
     }
+    const amt = parseFloat(copyAmount);
+    const minInv = Number(selectedMaster.minInvestment || 0);
+    if (!amt || amt <= 0) {
+      Alert.alert('Amount', 'Enter a valid investment amount');
+      return;
+    }
+    if (minInv && amt < minInv) {
+      Alert.alert('Amount', `Minimum investment for this master is $${minInv}`);
+      return;
+    }
 
     setIsSubmitting(true);
     try {
       const token = await SecureStore.getItemAsync('token');
-      const res = await fetch(`${API_URL}/social/follow`, {
+      const mid = selectedMaster.id || selectedMaster._id;
+      const url = `${API_URL}/social/copy?master_id=${mid}&account_id=${selectedAccount}&amount=${amt}`;
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({
-          provider_id: selectedMaster.id || selectedMaster._id,
-          account_id: selectedAccount,
-          copy_mode: copyMode === 'FIXED_LOT' ? 'fixed_lot' : 'multiplier',
-          fixed_lot_size: parseFloat(copyValue) || 0.01
-        })
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        Alert.alert('Success', 'Successfully following master trader!');
+        Alert.alert('Success', `Now copying ${selectedMaster.displayName || 'master trader'}!`);
         setShowFollowModal(false);
         setSelectedMaster(null);
+        setCopyAmount('');
         fetchMySubscriptions();
         fetchMasters();
       } else {
-        Alert.alert('Error', data.detail || data.message || 'Failed to follow');
+        Alert.alert('Error', data.detail || data.message || 'Failed to start copying');
       }
     } catch (e) {
-      Alert.alert('Error', 'Failed to follow master');
+      Alert.alert('Error', 'Failed to start copying master');
     }
     setIsSubmitting(false);
-  };
-
-  const handlePauseResume = async (subscriptionId, currentStatus) => {
-    // TrustEdge doesn't have pause/resume endpoint for subscriptions
-    Alert.alert('Info', 'Pause/resume is not available on this platform. Please unfollow and follow again if needed.');
   };
 
   const handleUnfollow = async (subscriptionId) => {
@@ -295,7 +358,7 @@ const CopyTradeScreen = ({ navigation }) => {
           onPress: async () => {
             try {
               const token = await SecureStore.getItemAsync('token');
-              const res = await fetch(`${API_URL}/social/unfollow/${subscriptionId}`, {
+              const res = await fetch(`${API_URL}/social/copy/${subscriptionId}`, {
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${token}` }
               });
@@ -351,6 +414,7 @@ const CopyTradeScreen = ({ navigation }) => {
 
   const getCopyModeLabel = (mode, value) => {
     switch (mode) {
+      case 'AMOUNT': return `Invested: $${Number(value || 0).toLocaleString()}`;
       case 'FIXED_LOT': return `Fixed: ${value} lots`;
       case 'BALANCE_BASED': return 'Balance Based';
       case 'EQUITY_BASED': return 'Equity Based';
@@ -509,20 +573,22 @@ const CopyTradeScreen = ({ navigation }) => {
                     
                     <View style={styles.statsGrid}>
                       <View style={styles.statBox}>
-                        <Text style={[styles.statBoxLabel, { color: colors.textMuted }]}>Win Rate</Text>
-                        <Text style={[styles.statBoxValue, { color: colors.textPrimary }]}>{master.stats?.winRate?.toFixed(1) || 0}%</Text>
+                        <Text style={[styles.statBoxLabel, { color: colors.textMuted }]}>Return</Text>
+                        <Text style={[styles.statBoxValue, { color: (master.totalReturnPct || 0) >= 0 ? '#22c55e' : '#ef4444' }]}>
+                          {(master.totalReturnPct || 0) >= 0 ? '+' : ''}{(master.totalReturnPct || 0).toFixed(2)}%
+                        </Text>
                       </View>
                       <View style={styles.statBox}>
-                        <Text style={[styles.statBoxLabel, { color: colors.textMuted }]}>Total Trades</Text>
-                        <Text style={[styles.statBoxValue, { color: colors.textPrimary }]}>{master.stats?.totalTrades || 0}</Text>
+                        <Text style={[styles.statBoxLabel, { color: colors.textMuted }]}>Max Drawdown</Text>
+                        <Text style={[styles.statBoxValue, { color: colors.textPrimary }]}>{(master.maxDrawdownPct || 0).toFixed(2)}%</Text>
                       </View>
                       <View style={styles.statBox}>
                         <Text style={[styles.statBoxLabel, { color: colors.textMuted }]}>Commission</Text>
                         <Text style={[styles.statBoxValue, { color: colors.textPrimary }]}>{master.approvedCommissionPercentage || 0}%</Text>
                       </View>
                       <View style={styles.statBox}>
-                        <Text style={[styles.statBoxLabel, { color: colors.textMuted }]}>Profit</Text>
-                        <Text style={[styles.statBoxValue, { color: '#22c55e' }]}>${master.stats?.totalProfitGenerated?.toFixed(2) || '0.00'}</Text>
+                        <Text style={[styles.statBoxLabel, { color: colors.textMuted }]}>Min Invest</Text>
+                        <Text style={[styles.statBoxValue, { color: colors.textPrimary }]}>${(master.minInvestment || 0).toLocaleString()}</Text>
                       </View>
                     </View>
                     
@@ -534,7 +600,7 @@ const CopyTradeScreen = ({ navigation }) => {
                     ) : (
                       <TouchableOpacity 
                         style={[styles.followBtn, { backgroundColor: colors.accent }]}
-                        onPress={() => { setSelectedMaster(master); setShowFollowModal(true); }}
+                        onPress={() => { setSelectedMaster(master); setCopyAmount(''); setShowFollowModal(true); }}
                       >
                         <Ionicons name="add-circle-outline" size={18} color="#fff" />
                         <Text style={[styles.followBtnText, { color: '#fff' }]}>Follow</Text>
@@ -613,14 +679,9 @@ const CopyTradeScreen = ({ navigation }) => {
                   </View>
                   
                   <View style={styles.subActions}>
-                    <TouchableOpacity style={[styles.editBtn, { backgroundColor: `${colors.accent}20` }]} onPress={() => handleEditSubscription(sub)}>
-                      <Ionicons name="settings-outline" size={18} color={colors.accent} />
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.pauseBtn} onPress={() => handlePauseResume(sub._id, sub.status)}>
-                      <Ionicons name={sub.status === 'ACTIVE' ? 'pause' : 'play'} size={18} color={sub.status === 'ACTIVE' ? '#eab308' : '#22c55e'} />
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.unfollowBtn} onPress={() => handleUnfollow(sub._id)}>
-                      <Ionicons name="close" size={18} color="#ef4444" />
+                    <TouchableOpacity style={[styles.unfollowBtn, { flex: 1, flexDirection: 'row', justifyContent: 'center', gap: 6 }]} onPress={() => handleUnfollow(sub._id)}>
+                      <Ionicons name="close-circle-outline" size={18} color="#ef4444" />
+                      <Text style={{ color: '#ef4444', fontWeight: '600' }}>Stop Copying</Text>
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -753,43 +814,30 @@ const CopyTradeScreen = ({ navigation }) => {
               ))}
             </ScrollView>
 
-            <Text style={styles.inputLabel}>Copy Mode</Text>
-            <View style={styles.copyModeRow}>
-              {['FIXED_LOT', 'MULTIPLIER'].map(mode => (
-                <TouchableOpacity
-                  key={mode}
-                  style={[styles.copyModeBtn, { backgroundColor: colors.bgCard, borderColor: colors.border }, copyMode === mode && { backgroundColor: `${colors.accent}20`, borderColor: colors.accent }]}
-                  onPress={() => setCopyMode(mode)}
-                >
-                  <Text style={[styles.copyModeText, { color: colors.textMuted }, copyMode === mode && { color: colors.accent }]}>
-                    {mode === 'FIXED_LOT' ? 'Fixed Lot' : 'Multiplier'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <Text style={[styles.inputLabel, { color: colors.textMuted }]}>{copyMode === 'FIXED_LOT' ? 'Lot Size' : 'Multiplier'}</Text>
+            <Text style={[styles.inputLabel, { color: colors.textMuted }]}>Investment Amount (USD)</Text>
             <TextInput
               style={[styles.input, { backgroundColor: colors.bgCard, borderColor: colors.border, color: colors.textPrimary }]}
-              value={copyValue}
-              onChangeText={setCopyValue}
-              placeholder={copyMode === 'FIXED_LOT' ? '0.01' : '1'}
+              value={copyAmount}
+              onChangeText={setCopyAmount}
+              placeholder={selectedMaster?.minInvestment ? String(selectedMaster.minInvestment) : '100'}
               placeholderTextColor="#666"
               keyboardType="numeric"
             />
             <Text style={[styles.inputHint, { color: colors.textMuted }]}>
-              {copyMode === 'FIXED_LOT' ? 'Fixed lot size for all copied trades' : '1 = Same size, 0.5 = Half, 2 = Double'}
+              {selectedMaster?.minInvestment
+                ? `Minimum investment: $${Number(selectedMaster.minInvestment).toLocaleString()}. Your trades will be sized proportionally to this master.`
+                : 'Capital allocated to copy this master, sized proportionally to their account.'}
             </Text>
 
-            <TouchableOpacity 
-              style={[styles.submitBtn, { backgroundColor: colors.accent }, isSubmitting && styles.submitBtnDisabled]} 
+            <TouchableOpacity
+              style={[styles.submitBtn, { backgroundColor: colors.accent }, isSubmitting && styles.submitBtnDisabled]}
               onPress={handleFollow}
               disabled={isSubmitting}
             >
               {isSubmitting ? (
                 <ActivityIndicator color="#fff" />
               ) : (
-                <Text style={[styles.submitBtnText, { color: '#fff' }]}>Start Following</Text>
+                <Text style={[styles.submitBtnText, { color: '#fff' }]}>Start Copying</Text>
               )}
             </TouchableOpacity>
           </View>

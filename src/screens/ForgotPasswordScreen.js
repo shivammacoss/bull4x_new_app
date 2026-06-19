@@ -40,7 +40,7 @@ const ForgotPasswordScreen = ({ navigation }) => {
     setError('');
 
     try {
-      const res = await fetch(`${API_URL}/auth/forgot-password`, {
+      const res = await fetch(`${API_URL}/auth/forgot-password-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email })
@@ -73,8 +73,8 @@ const ForgotPasswordScreen = ({ navigation }) => {
       setError('Passwords do not match');
       return;
     }
-    if (newPassword.length < 6) {
-      setError('Password must be at least 6 characters long');
+    if (newPassword.length < 8) {
+      setError('Password must be at least 8 characters long');
       return;
     }
 
@@ -85,10 +85,10 @@ const ForgotPasswordScreen = ({ navigation }) => {
       const res = await fetch(`${API_URL}/auth/verify-reset-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           email,
           otp,
-          newPassword 
+          new_password: newPassword
         })
       });
       const data = await res.json();

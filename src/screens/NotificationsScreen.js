@@ -58,88 +58,15 @@ const NotificationsScreen = ({ navigation }) => {
         createdAt: n.created_at || n.createdAt,
         read: n.is_read || n.read || false,
       }));
-      if (mapped.length > 0) {
-        setNotifications(mapped);
-        groupNotificationsByDate(mapped);
-      } else {
-        generateSampleNotifications();
-      }
+      setNotifications(mapped);
+      groupNotificationsByDate(mapped);
     } catch (e) {
       console.error('Error fetching notifications:', e);
-      generateSampleNotifications();
+      setNotifications([]);
+      groupNotificationsByDate([]);
     }
     setLoading(false);
     setRefreshing(false);
-  };
-
-  const generateSampleNotifications = () => {
-    const sampleNotifs = [
-      {
-        _id: '1',
-        type: 'TRADE_OPEN',
-        title: 'Trade Opened',
-        message: 'BUY EUR/USD 0.10 lots at 1.08542',
-        data: { symbol: 'EUR/USD', side: 'BUY', lotSize: 0.10, price: 1.08542 },
-        createdAt: new Date().toISOString(),
-        read: false
-      },
-      {
-        _id: '2',
-        type: 'TRADE_CLOSE',
-        title: 'Trade Closed',
-        message: 'SELL GBP/USD closed with +$45.20 profit',
-        data: { symbol: 'GBP/USD', pnl: 45.20 },
-        createdAt: new Date(Date.now() - 3600000).toISOString(),
-        read: false
-      },
-      {
-        _id: '3',
-        type: 'STOP_LOSS_HIT',
-        title: 'Stop Loss Hit',
-        message: 'XAU/USD position closed at stop loss -$23.50',
-        data: { symbol: 'XAU/USD', pnl: -23.50 },
-        createdAt: new Date(Date.now() - 7200000).toISOString(),
-        read: true
-      },
-      {
-        _id: '4',
-        type: 'TAKE_PROFIT_HIT',
-        title: 'Take Profit Hit',
-        message: 'BTC/USD position closed at take profit +$120.00',
-        data: { symbol: 'BTC/USD', pnl: 120.00 },
-        createdAt: new Date(Date.now() - 86400000).toISOString(),
-        read: true
-      },
-      {
-        _id: '5',
-        type: 'PENDING_ORDER',
-        title: 'Pending Order Placed',
-        message: 'Buy Limit EUR/USD at 1.08200 - 0.05 lots',
-        data: { symbol: 'EUR/USD', orderType: 'BUY_LIMIT', price: 1.08200 },
-        createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-        read: true
-      },
-      {
-        _id: '6',
-        type: 'PENDING_TRIGGERED',
-        title: 'Pending Order Triggered',
-        message: 'Buy Limit EUR/USD executed at 1.08200',
-        data: { symbol: 'EUR/USD' },
-        createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-        read: true
-      },
-      {
-        _id: '7',
-        type: 'DEPOSIT',
-        title: 'Deposit Received',
-        message: 'Your deposit of $500.00 has been credited',
-        data: { amount: 500 },
-        createdAt: new Date(Date.now() - 86400000 * 3).toISOString(),
-        read: true
-      },
-    ];
-    setNotifications(sampleNotifs);
-    groupNotificationsByDate(sampleNotifs);
   };
 
   const groupNotificationsByDate = (notifs) => {
