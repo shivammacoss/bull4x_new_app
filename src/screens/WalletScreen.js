@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -15,6 +15,7 @@ import {
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import * as SecureStore from 'expo-secure-store';
@@ -23,6 +24,19 @@ import * as ImagePicker from 'expo-image-picker';
 import { API_URL } from '../config';
 import { useTheme } from '../context/ThemeContext';
 import { authedFetch } from '../utils/authedFetch';
+
+// OxaPay crypto assets (mirrors web). crypto_currency tells OxaPay which coin
+// to invoice; the backend webhook auto-credits the wallet once paid.
+const CRYPTO_ASSETS = [
+  { id: 'USDT_TRC', label: 'USDT', sub: 'TRC20' },
+  { id: 'USDT_ERC', label: 'USDT', sub: 'ERC20' },
+  { id: 'USDC_TRC', label: 'USDC', sub: 'TRC20' },
+  { id: 'BTC', label: 'BTC', sub: 'Bitcoin' },
+  { id: 'ETH', label: 'ETH', sub: 'Ethereum' },
+  { id: 'TRX', label: 'TRX', sub: 'Tron' },
+  { id: 'SOL', label: 'SOL', sub: 'Solana' },
+  { id: 'XRP', label: 'XRP', sub: 'XRP' },
+];
 
 const WalletScreen = ({ navigation }) => {
   const { colors, isDark } = useTheme();
@@ -54,6 +68,13 @@ const WalletScreen = ({ navigation }) => {
   });
   const [upiId, setUpiId] = useState('');
   const [bankInfo, setBankInfo] = useState(null);
+  const [bankInfoLoading, setBankInfoLoading] = useState(false);
+  const [bankInfoError, setBankInfoError] = useState('');
+  // OxaPay crypto payment
+  const [selectedCrypto, setSelectedCrypto] = useState(CRYPTO_ASSETS[0].id);
+  const [creatingPayment, setCreatingPayment] = useState(false);
+  const [showOxapayWeb, setShowOxapayWeb] = useState(false);
+  const [oxapayUrl, setOxapayUrl] = useState('');
 
   // Refresh wallet data every time screen is focused
   useFocusEffect(
@@ -81,7 +102,27 @@ const WalletScreen = ({ navigation }) => {
   );
 
   const fetchCurrencies = async () => {
-    // TrustEdge does not have a currencies endpoint - USD only
+    // Offer INR alongside USD using the live USD->INR rate so the user can
+    // enter an INR amount and see the USD they'll receive (deposits credit the
+    // USD wallet; bank/UPI payments are made in INR).
+    try {
+      const token = await SecureStore.getItemAsync('token');
+      const res = await fetch(`${API_URL}/wallet/fx-rate`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const rate = Number(data?.rate || data?.usd_inr || 0);
+        if (rate > 0) {
+          const inr = { _id: 'inr', currency: 'INR', symbol: '₹', rateToUSD: rate, markup: 0 };
+          setCurrencies([inr]);
+          // Default the deposit input to INR so the user enters INR and the
+          // amount is always converted to USD before crediting the (USD) wallet.
+          setSelectedCurrency(inr);
+          return;
+        }
+      }
+    } catch (_) {}
     setCurrencies([]);
   };
 
@@ -90,6 +131,24 @@ const WalletScreen = ({ navigation }) => {
     const effectiveRate = currency.rateToUSD * (1 + (currency.markup || 0) / 100);
     return localAmt / effectiveRate;
   };
+
+  // Whenever the deposit modal opens, default the currency to INR (if the live
+  // rate loaded) so deposits are entered in INR and always converted to USD.
+  useEffect(() => {
+    if (showDepositModal && currencies.length > 0) {
+      setSelectedCurrency(currencies[0]);
+    }
+  }, [showDepositModal, currencies]);
+
+  // Refetch the bank/UPI account for the right amount tier as the user types
+  // (admin assigns different bank accounts to different deposit-amount tiers).
+  useEffect(() => {
+    if (!showDepositModal) return;
+    const usd = calculateUSDAmount(parseFloat(localAmount) || 0, selectedCurrency);
+    const tierAmt = usd > 0 ? usd : 100;
+    const t = setTimeout(() => fetchBankInfo(tierAmt), 400);
+    return () => clearTimeout(t);
+  }, [showDepositModal, localAmount, selectedCurrency]);
 
   const fetchWalletData = async () => {
     try {
@@ -141,21 +200,45 @@ const WalletScreen = ({ navigation }) => {
   };
 
   const fetchBankInfo = async (amount) => {
+    setBankInfoLoading(true);
+    setBankInfoError('');
     try {
-      const res = await fetch(`${API_URL}/wallet/bank-info?amount=${amount || 100}`);
+      // Use the same endpoint as the web trader: it picks a bank for the amount
+      // tier and FALLS BACK to any active bank (the old GET /wallet/bank-info
+      // returned 404 when no tier matched, so the admin bank never showed).
+      const token = await SecureStore.getItemAsync('token');
+      const body = amount && Number(amount) > 0 ? { amount: Number(amount) } : {};
+      const res = await fetch(`${API_URL}/wallet/deposit/bank-details`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
       if (res.ok) {
-        const data = await res.json();
-        setBankInfo(data);
+        const data = await res.json().catch(() => ({}));
+        if (data && Object.keys(data).length > 0) {
+          setBankInfo(data);
+        } else {
+          setBankInfo(null);
+          setBankInfoError('No bank/UPI account is configured yet. Please contact support.');
+        }
+      } else {
+        const d = await res.json().catch(() => ({}));
+        setBankInfo(null);
+        setBankInfoError(d.detail || 'Could not load bank/UPI details. Please retry.');
       }
     } catch (e) {
       console.error('Error fetching bank info:', e);
+      setBankInfo(null);
+      setBankInfoError('Could not load bank/UPI details. Check your connection and retry.');
     }
+    setBankInfoLoading(false);
   };
 
   const fetchPaymentMethods = async () => {
     setLoadingMethods(true);
     // TrustEdge uses fixed methods; bank details fetched from /wallet/bank-info
     setPaymentMethods([
+      { id: 'oxapay', type: 'Crypto', name: 'Crypto (Auto)' },
       { id: 'bank', type: 'Bank Transfer', name: 'Bank Transfer' },
       { id: 'upi', type: 'UPI', name: 'UPI' },
     ]);
@@ -197,6 +280,70 @@ const WalletScreen = ({ navigation }) => {
     return Math.round(num * 100) / 100; // 2 decimal places
   };
 
+  // OxaPay crypto deposit — creates an invoice and opens the hosted checkout.
+  // The deposit stays 'initiated' (hidden from history) until the payment is
+  // actually confirmed; the backend webhook then auto-credits the wallet.
+  const handleOxapayDeposit = async () => {
+    const sanitized = sanitizeAmount(localAmount);
+    if (!sanitized) {
+      Alert.alert('Error', 'Please enter a valid amount (max $1,000,000)');
+      return;
+    }
+    const usdAmount = selectedCurrency && selectedCurrency.currency !== 'USD'
+      ? calculateUSDAmount(parseFloat(localAmount), selectedCurrency)
+      : parseFloat(localAmount);
+
+    setCreatingPayment(true);
+    try {
+      const token = await SecureStore.getItemAsync('token');
+      // Attach the first live trading account if available (optional).
+      let accountId = null;
+      try {
+        const accRes = await fetch(`${API_URL}/accounts`, { headers: { Authorization: `Bearer ${token}` } });
+        if (accRes.ok) {
+          const accData = await accRes.json().catch(() => ({}));
+          const list = accData.items || accData || [];
+          const live = (Array.isArray(list) ? list : []).find(a => !(a.is_demo || a.isDemo));
+          accountId = live ? (live.id || live._id) : null;
+        }
+      } catch (_) {}
+
+      const res = await fetch(`${API_URL}/wallet/deposit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          amount: Math.round(usdAmount * 100) / 100,
+          method: 'oxapay',
+          crypto_currency: selectedCrypto,
+          ...(accountId ? { account_id: accountId } : {}),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.payment_url) {
+        setOxapayUrl(data.payment_url);
+        setShowOxapayWeb(true);
+      } else {
+        Alert.alert('Error', data.detail || data.message || 'Could not start crypto payment');
+      }
+    } catch (e) {
+      Alert.alert('Error', 'Could not start crypto payment. Please try again.');
+    }
+    setCreatingPayment(false);
+  };
+
+  const closeOxapayWeb = async () => {
+    setShowOxapayWeb(false);
+    setOxapayUrl('');
+    setShowDepositModal(false);
+    setLocalAmount('');
+    setSelectedMethod(null);
+    await fetchWalletData();
+    Alert.alert(
+      'Payment in progress',
+      'Your crypto payment will be credited to your wallet automatically once it is confirmed on the blockchain. This usually takes a few minutes.',
+    );
+  };
+
   const handleDeposit = async () => {
     const sanitized = sanitizeAmount(localAmount);
     if (!sanitized) {
@@ -212,9 +359,12 @@ const WalletScreen = ({ navigation }) => {
       return;
     }
 
-    const usdAmount = selectedCurrency && selectedCurrency.currency !== 'USD'
+    const usdRaw = selectedCurrency && selectedCurrency.currency !== 'USD'
       ? calculateUSDAmount(parseFloat(localAmount), selectedCurrency)
       : parseFloat(localAmount);
+    // Round to 2 decimals so the amount credited to the wallet matches the
+    // "You will receive $X" figure shown to the user exactly.
+    const usdAmount = Math.round(usdRaw * 100) / 100;
 
     setIsSubmitting(true);
     try {
@@ -564,6 +714,28 @@ const WalletScreen = ({ navigation }) => {
               </View>
             )}
 
+            {/* INR to pay — bank/UPI is paid in INR while the wallet is credited
+                in USD. Shows the user exactly how much INR to transfer. */}
+            {(() => {
+              if (selectedMethod?.id === 'oxapay') return null;
+              const inrRate = currencies.find(c => String(c.currency).toUpperCase() === 'INR')?.rateToUSD || 0;
+              const amt = parseFloat(localAmount);
+              if (!inrRate || !amt || amt <= 0) return null;
+              const usd = selectedCurrency?.currency === 'USD' ? amt : calculateUSDAmount(amt, selectedCurrency);
+              const inrPay = usd * inrRate;
+              return (
+                <View style={[styles.conversionBox, { marginTop: 8 }]}>
+                  <Text style={styles.conversionLabel}>Pay via Bank / UPI (INR)</Text>
+                  <Text style={styles.conversionAmount}>
+                    ₹{inrPay.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </Text>
+                  <Text style={styles.conversionRate}>
+                    for ${usd.toFixed(2)} credited · 1 USD = ₹{inrRate.toFixed(2)}
+                  </Text>
+                </View>
+              );
+            })()}
+
             <Text style={[styles.inputLabel, { color: colors.textMuted }]}>Payment Method</Text>
             {loadingMethods ? (
               <View style={{ padding: 20, alignItems: 'center' }}>
@@ -582,11 +754,11 @@ const WalletScreen = ({ navigation }) => {
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.methodsScroll}>
                 {paymentMethods.map((method) => (
                   <TouchableOpacity
-                    key={method._id}
-                    style={[styles.methodCard, { backgroundColor: colors.bgSecondary, borderColor: colors.border }, selectedMethod?._id === method._id && styles.methodCardActive]}
+                    key={method.id}
+                    style={[styles.methodCard, { backgroundColor: colors.bgSecondary, borderColor: colors.border }, selectedMethod?.id === method.id && styles.methodCardActive]}
                     onPress={() => setSelectedMethod(method)}
                   >
-                    <Text style={[styles.methodName, { color: colors.textPrimary }, selectedMethod?._id === method._id && { color: '#fff' }]}>
+                    <Text style={[styles.methodName, { color: colors.textPrimary }, selectedMethod?.id === method.id && { color: '#fff' }]}>
                       {method.type || method.name}
                     </Text>
                   </TouchableOpacity>
@@ -594,11 +766,57 @@ const WalletScreen = ({ navigation }) => {
               </ScrollView>
             )}
 
-            {/* Payment Method Details */}
-            {selectedMethod && (
+            {/* Crypto (OxaPay) — asset picker + pay button */}
+            {selectedMethod?.id === 'oxapay' && (
               <View style={[styles.methodDetails, { backgroundColor: colors.bgSecondary, borderColor: colors.border }]}>
-                {!bankInfo && (
+                <Text style={[styles.detailLabel, { color: colors.textMuted, marginBottom: 8 }]}>Select crypto to pay with</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  {CRYPTO_ASSETS.map((c) => {
+                    const sel = selectedCrypto === c.id;
+                    return (
+                      <TouchableOpacity
+                        key={c.id}
+                        onPress={() => setSelectedCrypto(c.id)}
+                        style={{
+                          paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, marginRight: 8,
+                          borderWidth: sel ? 2 : 1, borderColor: sel ? colors.accent : colors.border,
+                          backgroundColor: sel ? colors.accent + '15' : colors.bgCard, alignItems: 'center', minWidth: 72,
+                        }}
+                      >
+                        <Text style={{ color: sel ? colors.accent : colors.textPrimary, fontWeight: '700', fontSize: 14 }}>{c.label}</Text>
+                        <Text style={{ color: colors.textMuted, fontSize: 10, marginTop: 2 }}>{c.sub}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 12 }}>
+                  <Ionicons name="flash-outline" size={16} color={colors.accent} style={{ marginTop: 1 }} />
+                  <Text style={{ color: colors.textMuted, fontSize: 12, flex: 1, lineHeight: 17 }}>
+                    Auto deposit: pay on the secure OxaPay page and your wallet is credited automatically once the payment is confirmed. No screenshot needed.
+                  </Text>
+                </View>
+              </View>
+            )}
+
+            {/* Payment Method Details (Bank / UPI only) */}
+            {selectedMethod && selectedMethod.type !== 'Crypto' && (
+              <View style={[styles.methodDetails, { backgroundColor: colors.bgSecondary, borderColor: colors.border }]}>
+                {!bankInfo && bankInfoLoading && (
                   <ActivityIndicator size="small" color={colors.accent} style={{ margin: 12 }} />
+                )}
+                {!bankInfo && !bankInfoLoading && (
+                  <View style={{ padding: 12, alignItems: 'center' }}>
+                    <Ionicons name="alert-circle-outline" size={28} color={colors.textMuted} />
+                    <Text style={{ color: colors.textMuted, fontSize: 12, textAlign: 'center', marginTop: 6 }}>
+                      {bankInfoError || 'Bank/UPI details unavailable. Please contact support.'}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => fetchBankInfo(calculateUSDAmount(parseFloat(localAmount) || 0, selectedCurrency) || 100)}
+                      style={{ marginTop: 8 }}
+                    >
+                      <Text style={{ color: colors.accent, fontWeight: '600' }}>Retry</Text>
+                    </TouchableOpacity>
+                  </View>
                 )}
                 {selectedMethod.type === 'Bank Transfer' && bankInfo && (
                   <>
@@ -620,11 +838,11 @@ const WalletScreen = ({ navigation }) => {
                         <Ionicons name="copy-outline" size={16} color={colors.textMuted} />
                       </TouchableOpacity>
                     ) : null}
-                    {bankInfo.account_name ? (
-                      <TouchableOpacity style={styles.copyRow} onPress={() => { Clipboard.setStringAsync(bankInfo.account_name); Alert.alert('Copied', 'Name copied!'); }}>
+                    {(bankInfo.account_holder || bankInfo.account_name) ? (
+                      <TouchableOpacity style={styles.copyRow} onPress={() => { Clipboard.setStringAsync(bankInfo.account_holder || bankInfo.account_name); Alert.alert('Copied', 'Name copied!'); }}>
                         <Text style={styles.detailRow}>
                           <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Name: </Text>
-                          <Text style={[styles.detailValue, { color: colors.textPrimary }]}>{bankInfo.account_name}</Text>
+                          <Text style={[styles.detailValue, { color: colors.textPrimary }]}>{bankInfo.account_holder || bankInfo.account_name}</Text>
                         </Text>
                         <Ionicons name="copy-outline" size={16} color={colors.textMuted} />
                       </TouchableOpacity>
@@ -660,6 +878,8 @@ const WalletScreen = ({ navigation }) => {
               </View>
             )}
 
+            {selectedMethod?.id !== 'oxapay' && (
+            <>
             <Text style={[styles.inputLabel, { color: colors.textMuted }]}>Transaction ID / Reference Number *</Text>
             <TextInput
               style={[styles.input, { backgroundColor: colors.bgSecondary, borderColor: colors.border, color: colors.textPrimary }]}
@@ -696,8 +916,8 @@ const WalletScreen = ({ navigation }) => {
               </TouchableOpacity>
             )}
 
-            <TouchableOpacity 
-              style={[styles.submitBtn, { backgroundColor: colors.accent }, isSubmitting && styles.submitBtnDisabled]} 
+            <TouchableOpacity
+              style={[styles.submitBtn, { backgroundColor: colors.accent }, isSubmitting && styles.submitBtnDisabled]}
               onPress={handleDeposit}
               disabled={isSubmitting}
             >
@@ -707,10 +927,68 @@ const WalletScreen = ({ navigation }) => {
                 <Text style={[styles.submitBtnText, { color: '#fff' }]}>Submit Deposit Request</Text>
               )}
             </TouchableOpacity>
+            </>
+            )}
+
+            {selectedMethod?.id === 'oxapay' && (
+              <TouchableOpacity
+                style={[styles.submitBtn, { backgroundColor: colors.accent, flexDirection: 'row', gap: 8 }, (creatingPayment || !localAmount) && styles.submitBtnDisabled]}
+                onPress={handleOxapayDeposit}
+                disabled={creatingPayment || !localAmount}
+              >
+                {creatingPayment ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons name="logo-bitcoin" size={18} color="#fff" />
+                    <Text style={[styles.submitBtnText, { color: '#fff' }]}>Pay with Crypto</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            )}
             <View style={{ height: 40 }} />
           </ScrollView>
           </SafeAreaView>
         </KeyboardAvoidingView>
+      </Modal>
+
+      {/* OxaPay crypto payment WebView */}
+      <Modal visible={showOxapayWeb} animationType="slide" onRequestClose={closeOxapayWeb}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: colors.bgPrimary }}>
+          <View style={{
+            flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+            paddingHorizontal: 16, paddingVertical: 12,
+            borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border,
+          }}>
+            <Text style={{ color: colors.textPrimary, fontSize: 16, fontWeight: '700' }}>Complete Crypto Payment</Text>
+            <TouchableOpacity onPress={closeOxapayWeb} style={{ padding: 4 }}>
+              <Ionicons name="close" size={24} color={colors.textMuted} />
+            </TouchableOpacity>
+          </View>
+          {oxapayUrl ? (
+            <WebView
+              source={{ uri: oxapayUrl }}
+              startInLoadingState
+              renderLoading={() => (
+                <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bgPrimary }}>
+                  <ActivityIndicator size="large" color={colors.accent} />
+                </View>
+              )}
+              style={{ flex: 1, backgroundColor: colors.bgPrimary }}
+            />
+          ) : null}
+          <View style={{ padding: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }}>
+            <Text style={{ color: colors.textMuted, fontSize: 12, textAlign: 'center', lineHeight: 17 }}>
+              After paying, tap close. Your wallet is credited automatically once the payment is confirmed.
+            </Text>
+            <TouchableOpacity
+              style={[styles.submitBtn, { backgroundColor: colors.accent, marginTop: 10 }]}
+              onPress={closeOxapayWeb}
+            >
+              <Text style={[styles.submitBtnText, { color: '#fff' }]}>I've Paid / Close</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
       </Modal>
 
       {/* Withdraw Modal */}
@@ -756,11 +1034,11 @@ const WalletScreen = ({ navigation }) => {
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.methodsScroll}>
               {paymentMethods.filter(m => m.type !== 'QR Code').map((method) => (
                 <TouchableOpacity
-                  key={method._id}
-                  style={[styles.methodCard, { backgroundColor: colors.bgSecondary, borderColor: colors.border }, selectedMethod?._id === method._id && styles.methodCardActive]}
+                  key={method.id}
+                  style={[styles.methodCard, { backgroundColor: colors.bgSecondary, borderColor: colors.border }, selectedMethod?.id === method.id && styles.methodCardActive]}
                   onPress={() => setSelectedMethod(method)}
                 >
-                  <Text style={[styles.methodName, { color: colors.textPrimary }, selectedMethod?._id === method._id && { color: '#fff' }]}>
+                  <Text style={[styles.methodName, { color: colors.textPrimary }, selectedMethod?.id === method.id && { color: '#fff' }]}>
                     {method.type || method.name}
                   </Text>
                 </TouchableOpacity>

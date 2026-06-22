@@ -44,6 +44,7 @@ const DashboardScreen = () => {
   const { colors } = useTheme();
 
   const [tab, setTab] = useState('accounts');
+  const [acctFilter, setAcctFilter] = useState('real'); // 'real' | 'demo'
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -203,6 +204,15 @@ const DashboardScreen = () => {
   };
 
   const liveAccounts = useMemo(() => rows.filter((a) => !a.is_demo), [rows]);
+  const demoAccounts = useMemo(() => rows.filter((a) => a.is_demo), [rows]);
+
+  // Accounts shown in the "Trading Accounts" tab depend on the Real/Demo switch.
+  const displayedAccounts = acctFilter === 'demo' ? demoAccounts : liveAccounts;
+
+  const totalEquity = useMemo(
+    () => rows.reduce((sum, a) => sum + (Number(a.equity) || 0), 0),
+    [rows],
+  );
 
   const transferOptions = useMemo(() => {
     const opts = [
@@ -409,6 +419,41 @@ const DashboardScreen = () => {
         </View>
       )}
 
+      {/* Quick actions */}
+      <View style={S.quickRow}>
+        <TouchableOpacity
+          style={[S.quickCard, { backgroundColor: colors.bgCard, borderColor: colors.border }]}
+          activeOpacity={0.8}
+          onPress={() => navigation.navigate('Wallet')}
+        >
+          <View style={[S.quickIcon, { backgroundColor: colors.accent + '18' }]}>
+            <Ionicons name="wallet" size={18} color={colors.accent} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[S.quickLabel, { color: colors.textMuted }]}>Wallet</Text>
+            <Text style={[S.quickValue, { color: colors.textPrimary }]} numberOfLines={1}>
+              {fmt(mainWallet)}
+            </Text>
+          </View>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[S.quickCard, { backgroundColor: colors.bgCard, borderColor: colors.border }]}
+          activeOpacity={0.8}
+          onPress={() => { setTab('accounts'); navigation.navigate('Accounts'); }}
+        >
+          <View style={[S.quickIcon, { backgroundColor: colors.accent + '18' }]}>
+            <Ionicons name="briefcase" size={18} color={colors.accent} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[S.quickLabel, { color: colors.textMuted }]}>Trading Accounts</Text>
+            <Text style={[S.quickValue, { color: colors.textPrimary }]} numberOfLines={1}>
+              {fmt(totalEquity)}
+            </Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+
       {/* Tabs */}
       <View style={[S.tabsRow, { backgroundColor: colors.bgCard, borderBottomColor: colors.border }]}>
         {[
@@ -489,19 +534,51 @@ const DashboardScreen = () => {
               <Text style={[S.newAccountText, { color: colors.accent }]}>New Account</Text>
             </TouchableOpacity>
 
+            {/* Real / Demo switch */}
+            <View style={[S.segment, { backgroundColor: colors.bgSecondary, borderColor: colors.border }]}>
+              {[
+                { id: 'real', label: 'Real', count: liveAccounts.length },
+                { id: 'demo', label: 'Demo', count: demoAccounts.length },
+              ].map((seg) => {
+                const active = acctFilter === seg.id;
+                return (
+                  <TouchableOpacity
+                    key={seg.id}
+                    activeOpacity={0.8}
+                    onPress={() => setAcctFilter(seg.id)}
+                    style={[
+                      S.segmentBtn,
+                      active && { backgroundColor: colors.accent },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        S.segmentText,
+                        { color: active ? '#fff' : colors.textMuted },
+                      ]}
+                    >
+                      {seg.label} ({seg.count})
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
             {loading ? (
               <View style={S.loaderBox}>
                 <ActivityIndicator color={colors.accent} />
                 <Text style={[S.loaderText, { color: colors.textMuted }]}>Loading accounts…</Text>
               </View>
-            ) : rows.length === 0 ? (
+            ) : displayedAccounts.length === 0 ? (
               <View style={[S.emptyBox, { borderColor: colors.border, backgroundColor: colors.bgSecondary }]}>
                 <Text style={[S.emptyText, { color: colors.textMuted }]}>
-                  You do not have a trading account yet. Open one to start.
+                  {acctFilter === 'demo'
+                    ? 'No demo accounts yet. Open one to practice risk-free.'
+                    : 'No live trading accounts yet. Open one to start.'}
                 </Text>
               </View>
             ) : (
-              rows.map((row) => (
+              displayedAccounts.map((row) => (
                 <AccountCard
                   key={row.id}
                   row={row}
@@ -845,6 +922,52 @@ const styles = (colors) =>
       borderWidth: 1,
     },
     avatarText: { fontSize: 13, fontWeight: '800' },
+
+    // Quick actions
+    quickRow: {
+      flexDirection: 'row',
+      gap: 10,
+      paddingHorizontal: 14,
+      paddingTop: 12,
+      paddingBottom: 10,
+    },
+    quickCard: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingHorizontal: 12,
+      paddingVertical: 12,
+      borderRadius: 14,
+      borderWidth: 1,
+    },
+    quickIcon: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    quickLabel: { fontSize: 11, fontWeight: '600' },
+    quickValue: { fontSize: 15, fontWeight: '800', marginTop: 2 },
+
+    // Real / Demo segment
+    segment: {
+      flexDirection: 'row',
+      padding: 4,
+      borderRadius: 12,
+      borderWidth: 1,
+      marginBottom: 14,
+      gap: 4,
+    },
+    segmentBtn: {
+      flex: 1,
+      paddingVertical: 9,
+      borderRadius: 9,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    segmentText: { fontSize: 13, fontWeight: '800' },
 
     // Tabs
     tabsRow: {

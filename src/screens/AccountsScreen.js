@@ -162,11 +162,19 @@ const AccountsScreen = ({ navigation, route }) => {
     }
   }, [user]);
   
-  // Auto-open the new-account modal if navigated with action=open
+  // Auto-open the new-account modal if navigated with action=open.
+  // A `mode` param ('live' | 'demo') comes from the Home quick-switch so the
+  // picker opens in the same mode the user was viewing (demo → demo groups,
+  // no KYC gate) instead of always defaulting to live.
   useEffect(() => {
     if (route?.params?.action === 'open') {
-      openNewAccountModal();
-      navigation.setParams({ action: null });
+      const mode =
+        route?.params?.mode === 'demo' ? 'demo'
+        : route?.params?.mode === 'live' ? 'live'
+        : null;
+      if (mode) setAcctMode(mode);
+      openNewAccountModal(mode || undefined);
+      navigation.setParams({ action: null, mode: null });
     }
   }, [route?.params?.action]);
 
@@ -248,8 +256,14 @@ const AccountsScreen = ({ navigation, route }) => {
       });
       const data = await res.json();
       const items = data.items || data || [];
+      // Backend soft-deletes accounts (is_active=false) on close. Defensively
+      // drop them here so a closed account never reappears in the list even if
+      // the API returns it (matches the web trader app's isActiveRow filter).
+      const activeItems = (Array.isArray(items) ? items : []).filter(
+        (a) => a && a.is_active !== false && a.isActive !== false,
+      );
       // Map TrustEdge account fields to expected format (show both demo and live, like web)
-      const mappedAccounts = items.map((a) => ({
+      const mappedAccounts = activeItems.map((a) => ({
         ...a,
         id: a.id || a._id,
         _id: a.id || a._id,
@@ -554,8 +568,11 @@ const AccountsScreen = ({ navigation, route }) => {
     setGroupsLoading(false);
   };
 
-  const openNewAccountModal = async () => {
-    const demo = acctMode === 'demo';
+  const openNewAccountModal = async (modeOverride) => {
+    // modeOverride may be a press event when wired directly to onPress — only
+    // honor it when it's an explicit 'live' | 'demo' string.
+    const mode = typeof modeOverride === 'string' ? modeOverride : acctMode;
+    const demo = mode === 'demo';
     // Live accounts require approved KYC. Demo accounts skip the gate (matches web).
     if (!demo) {
       // Re-check KYC so the gate stays accurate even if the user lingered long
@@ -637,11 +654,18 @@ const AccountsScreen = ({ navigation, route }) => {
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${token}` },
               });
+              const data = await res.json().catch(() => ({}));
               if (res.ok) {
+                // 1) Optimistic removal for instant feedback.
                 setAccounts((prev) => prev.filter((a) => (a.id || a._id) !== aid));
-                Alert.alert('Deleted', 'Account removed');
+                setExpandedAccountId(null);
+                // 2) Re-sync from backend so the list reflects true state — if the
+                //    account somehow survived the delete it will show again here
+                //    (and the user knows it didn't work), and the swept balance
+                //    lands back in the wallet view.
+                await Promise.all([fetchAccounts(), fetchWalletBalance()]);
+                Alert.alert('Account closed', data.message || 'Account removed.');
               } else {
-                const data = await res.json().catch(() => ({}));
                 Alert.alert('Error', data.detail || data.message || 'Delete failed');
               }
             } catch (e) {
@@ -1304,9 +1328,13 @@ const AccountsScreen = ({ navigation, route }) => {
               groupsLoading ? (
                 <ActivityIndicator color={colors.accent} style={{ marginVertical: 30 }} />
               ) : groups.length === 0 ? (
-                <View style={{ paddingVertical: 30, alignItems: 'center' }}>
+                <View style={{ paddingVertical: 30, alignItems: 'center', paddingHorizontal: 20 }}>
                   <Ionicons name="alert-circle-outline" size={40} color={colors.textMuted} />
-                  <Text style={{ color: colors.textMuted, marginTop: 10, fontSize: 13 }}>No account types available</Text>
+                  <Text style={{ color: colors.textMuted, marginTop: 10, fontSize: 13, textAlign: 'center' }}>
+                    {acctMode === 'demo'
+                      ? 'No demo account types available yet. Ask the admin to add a demo account type.'
+                      : 'No account types available'}
+                  </Text>
                 </View>
               ) : (
                 <>

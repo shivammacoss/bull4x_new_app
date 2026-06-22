@@ -1436,8 +1436,12 @@ const TradingProvider = ({ children, navigation, route }) => {
 
       const rawList = data.items || data || [];
       const normalized = Array.isArray(rawList) ? rawList.map(normalizeTradingAccountRow) : [];
-      // Show both demo and live in the picker (matches web)
-      const accountsList = normalized;
+      // Show both demo and live in the picker (matches web), but drop closed
+      // (soft-deleted, is_active=false) accounts so a deleted account never
+      // reappears on the Home tab.
+      const accountsList = normalized.filter(
+        (a) => a && a.is_active !== false && a.isActive !== false,
+      );
 
       setAccounts(accountsList);
       
@@ -1844,6 +1848,7 @@ const HomeTab = ({ navigation }) => {
 
   // Home tab state: 'accounts' or 'transfer'
   const [homeTab, setHomeTab] = useState('accounts');
+  const [acctFilter, setAcctFilter] = useState('real'); // 'real' | 'demo'
   const [expandedAccountId, setExpandedAccountId] = useState(null);
 
   // Internal Transfer state
@@ -2172,7 +2177,11 @@ const HomeTab = ({ navigation }) => {
     );
   }
 
-  const visibleAccounts = (ctx.accounts || []).filter((a) => a && (a.is_active !== false));
+  const activeAccounts = (ctx.accounts || []).filter((a) => a && (a.is_active !== false));
+  const realAccounts = activeAccounts.filter((a) => !isDemoTradingAccount(a));
+  const demoAccountsList = activeAccounts.filter((a) => isDemoTradingAccount(a));
+  // Accounts shown in the list depend on the Real/Demo switch.
+  const visibleAccounts = acctFilter === 'demo' ? demoAccountsList : realAccounts;
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bgPrimary }}>
@@ -2288,6 +2297,52 @@ const HomeTab = ({ navigation }) => {
         >
           <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '800' }}>{userInitials}</Text>
         </TouchableOpacity>
+      </View>
+
+      {/* Quick actions — icon buttons (Wallet / Position / News) */}
+      <View
+        style={{
+          flexDirection: 'row',
+          gap: 10,
+          paddingHorizontal: 14,
+          paddingTop: 12,
+          paddingBottom: 4,
+          backgroundColor: colors.bgPrimary,
+        }}
+      >
+        {[
+          { key: 'wallet', label: 'Wallet', icon: 'wallet', onPress: () => parentNav?.navigate('Wallet') },
+          { key: 'position', label: 'Position', icon: 'stats-chart', onPress: () => parentNav?.navigate('Portfolio') },
+          { key: 'news', label: 'News', icon: 'newspaper', onPress: () => parentNav?.navigate('EconomicCalendar') },
+        ].map((b) => (
+          <TouchableOpacity
+            key={b.key}
+            activeOpacity={0.8}
+            onPress={b.onPress}
+            style={{
+              flex: 1,
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+              paddingVertical: 12,
+              borderRadius: 14,
+              borderWidth: 1,
+              borderColor: colors.border,
+              backgroundColor: colors.bgCard,
+            }}
+          >
+            <View
+              style={{
+                width: 38, height: 38, borderRadius: 19,
+                alignItems: 'center', justifyContent: 'center',
+                backgroundColor: colors.primary + '18',
+              }}
+            >
+              <Ionicons name={b.icon} size={20} color={colors.primary} />
+            </View>
+            <Text style={{ fontSize: 12, fontWeight: '700', color: colors.textPrimary }}>{b.label}</Text>
+          </TouchableOpacity>
+        ))}
       </View>
 
       {/* Search results dropdown */}
@@ -2427,12 +2482,67 @@ const HomeTab = ({ navigation }) => {
                 borderColor: colors.primary,
                 marginBottom: 14,
               }}
-              onPress={() => parentNav?.navigate('Accounts', { action: 'open' })}
+              onPress={() =>
+                parentNav?.navigate('Accounts', {
+                  action: 'open',
+                  mode: acctFilter === 'demo' ? 'demo' : 'live',
+                })
+              }
               activeOpacity={0.7}
             >
               <Ionicons name="add" size={18} color={colors.primary} />
-              <Text style={{ color: colors.primary, fontSize: 14, fontWeight: '800' }}>New Account</Text>
+              <Text style={{ color: colors.primary, fontSize: 14, fontWeight: '800' }}>
+                {acctFilter === 'demo' ? 'New Demo Account' : 'New Account'}
+              </Text>
             </TouchableOpacity>
+
+            {/* Real / Demo switch */}
+            <View
+              style={{
+                flexDirection: 'row',
+                padding: 4,
+                gap: 4,
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: colors.border,
+                backgroundColor: colors.bgSecondary,
+                marginBottom: 14,
+              }}
+            >
+              {[
+                { id: 'real', label: 'Real', count: realAccounts.length },
+                { id: 'demo', label: 'Demo', count: demoAccountsList.length },
+              ].map((seg) => {
+                const active = acctFilter === seg.id;
+                return (
+                  <TouchableOpacity
+                    key={seg.id}
+                    activeOpacity={0.8}
+                    onPress={() => { setAcctFilter(seg.id); setExpandedAccountId(null); }}
+                    style={{
+                      flex: 1,
+                      paddingVertical: 9,
+                      borderRadius: 9,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: active
+                        ? (seg.id === 'demo' ? '#38bdf8' : colors.primary)
+                        : 'transparent',
+                    }}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 13,
+                        fontWeight: '800',
+                        color: active ? '#fff' : colors.textMuted,
+                      }}
+                    >
+                      {seg.label} ({seg.count})
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
 
             {ctx.loading ? (
               <View style={{ alignItems: 'center', paddingVertical: 36, gap: 8 }}>
@@ -2451,7 +2561,9 @@ const HomeTab = ({ navigation }) => {
                 }}
               >
                 <Text style={{ fontSize: 13, color: colors.textMuted, textAlign: 'center' }}>
-                  You do not have a trading account yet. Open one to start.
+                  {acctFilter === 'demo'
+                    ? 'No demo accounts yet. Open one to practice risk-free.'
+                    : 'You do not have a trading account yet. Open one to start.'}
                 </Text>
               </View>
             ) : (
@@ -4289,6 +4401,26 @@ const TradeTab = () => {
   // History filter states
   const [historyFilter, setHistoryFilter] = useState('all');
 
+  // Account switcher (orders view) — switch the active account and see that
+  // account's positions / pending / history without leaving this page.
+  const [showAcctSwitch, setShowAcctSwitch] = useState(false);
+  const switchableAccounts = (ctx.accounts || []).filter(a => a && a.is_active !== false);
+  const activeAcct = ctx.isChallengeMode ? ctx.selectedChallengeAccount : ctx.selectedAccount;
+  const activeAcctLabel = activeAcct
+    ? `#${activeAcct.is_demo || activeAcct.isDemo ? 'D' : 'L'}#${activeAcct.account_number || activeAcct.accountId || ''}`
+    : 'Select account';
+
+  const handleSwitchAccount = async (acct) => {
+    setShowAcctSwitch(false);
+    if (!acct) return;
+    ctx.setSelectedAccount(acct);
+    try { await SecureStore.setItemAsync('selectedAccountId', acct.id || acct._id); } catch (_) {}
+    ctx.fetchAccountSummary?.();
+    ctx.fetchOpenTrades?.();
+    ctx.fetchPendingOrders?.();
+    ctx.fetchTradeHistory?.();
+  };
+
   const totalUsedMargin = (Array.isArray(ctx.openTrades) ? ctx.openTrades : []).reduce((sum, trade) => sum + (trade.marginUsed || 0), 0);
   
   // Filter trade history based on selected filter
@@ -4688,6 +4820,70 @@ const TradeTab = () => {
     <View style={[styles.tradeDashRoot, { backgroundColor: colors.bgPrimary }]}>
       {/* Account Stats - Compact vertical list */}
       <View style={{ paddingTop: 44, backgroundColor: colors.bgPrimary }}>
+        {/* Account switcher — pick which account's orders to view/trade */}
+        <View style={{ paddingHorizontal: 16, paddingBottom: 10 }}>
+          <TouchableOpacity
+            onPress={() => setShowAcctSwitch(v => !v)}
+            activeOpacity={0.8}
+            style={{
+              flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+              borderWidth: 1, borderColor: colors.border, borderRadius: 10,
+              paddingHorizontal: 12, paddingVertical: 10, backgroundColor: colors.bgCard,
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Ionicons name="briefcase-outline" size={16} color={colors.primary} />
+              <Text style={{ color: colors.textPrimary, fontSize: 14, fontWeight: '700' }}>{activeAcctLabel}</Text>
+              {activeAcct?.currency ? (
+                <Text style={{ color: colors.textMuted, fontSize: 12 }}>· {String(activeAcct.currency).toUpperCase()}</Text>
+              ) : null}
+            </View>
+            <Ionicons name={showAcctSwitch ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textMuted} />
+          </TouchableOpacity>
+
+          {showAcctSwitch && (
+            <View style={{
+              marginTop: 6, borderWidth: 1, borderColor: colors.border, borderRadius: 10,
+              backgroundColor: colors.bgCard, overflow: 'hidden',
+            }}>
+              {switchableAccounts.length === 0 ? (
+                <Text style={{ color: colors.textMuted, fontSize: 13, padding: 12 }}>No accounts</Text>
+              ) : switchableAccounts.map((a) => {
+                const aid = a.id || a._id;
+                const isSel = (activeAcct?.id || activeAcct?._id) === aid;
+                const demo = a.is_demo || a.isDemo;
+                return (
+                  <TouchableOpacity
+                    key={aid}
+                    onPress={() => handleSwitchAccount(a)}
+                    style={{
+                      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                      paddingHorizontal: 12, paddingVertical: 11,
+                      borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border,
+                      backgroundColor: isSel ? colors.primary + '14' : 'transparent',
+                    }}
+                  >
+                    <View>
+                      <Text style={{ color: colors.textPrimary, fontSize: 13, fontWeight: '700' }}>
+                        #{demo ? 'D' : 'L'}#{a.account_number || a.accountId || ''}
+                      </Text>
+                      <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 1 }}>
+                        {(a.account_group?.name || (demo ? 'Demo' : 'Live'))} · {String(a.currency || 'USD').toUpperCase()}
+                      </Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <Text style={{ color: colors.textPrimary, fontSize: 13, fontWeight: '700' }}>
+                        {currencySymbol(a.currency)}{(Number(a.balance) || 0).toFixed(2)}
+                      </Text>
+                      {isSel && <Ionicons name="checkmark-circle" size={18} color={colors.primary} />}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+        </View>
+
         {[
           { label: 'Balance', value: fmtSym(balanceVal), color: colors.textPrimary },
           { label: 'Equity', value: fmtSym(ctx.realTimeEquity), color: equityColor },

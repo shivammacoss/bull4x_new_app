@@ -282,7 +282,7 @@ const OrderBookScreen = ({ navigation }) => {
               });
               const data = await res.json();
               if (res.ok) {
-                Alert.alert('Success', `Trade closed! P/L: $${(data.profit || data.pnl || 0).toFixed(2)}`);
+                Alert.alert('Success', `Trade closed! P/L: ${currencySymbol(trade.currency)}${(data.profit || data.pnl || 0).toFixed(2)}`);
                 refreshTrades();
               } else {
                 Alert.alert('Error', data.detail || data.message || 'Failed to close trade');
@@ -370,7 +370,7 @@ const OrderBookScreen = ({ navigation }) => {
           <View style={styles.detailRow}>
             <Text style={[styles.detailLabel, { color: colors.textMuted }]}>P/L</Text>
             <Text style={[styles.detailValue, { color: pnl >= 0 ? '#22c55e' : '#ef4444', fontWeight: '600' }]}>
-              ${pnl.toFixed(2)}
+              {currencySymbol(trade.currency)}{pnl.toFixed(2)}
             </Text>
           </View>
         </View>
@@ -454,7 +454,7 @@ const OrderBookScreen = ({ navigation }) => {
         <View style={styles.detailRow}>
           <Text style={[styles.detailLabel, { color: colors.textMuted }]}>P/L</Text>
           <Text style={[styles.detailValue, { color: (trade.realizedPnl || 0) >= 0 ? '#22c55e' : '#ef4444', fontWeight: '600' }]}>
-            ${(trade.realizedPnl || 0).toFixed(2)}
+            {currencySymbol(trade.currency)}{(trade.realizedPnl || 0).toFixed(2)}
           </Text>
         </View>
       </View>
@@ -512,7 +512,7 @@ const OrderBookScreen = ({ navigation }) => {
               style={[styles.accountOption, { borderBottomColor: colors.border }, selectedAccount === acc._id && styles.accountOptionActive]}
               onPress={() => { setSelectedAccount(acc._id); setShowAccountPicker(false); }}
             >
-              <Text style={[styles.accountOptionText, { color: colors.textPrimary }]}>{acc.accountId} - ${(acc.balance || 0).toFixed(2)}</Text>
+              <Text style={[styles.accountOptionText, { color: colors.textPrimary }]}>{acc.accountId} - {currencySymbol(acc.currency)}{(acc.balance || 0).toFixed(2)}</Text>
             </TouchableOpacity>
           ))}
         </View>
