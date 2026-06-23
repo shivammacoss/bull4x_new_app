@@ -358,6 +358,12 @@ const WalletScreen = ({ navigation }) => {
       Alert.alert('Error', 'Please enter the transaction ID/reference number');
       return;
     }
+    // Payment screenshot is mandatory for manual (bank/UPI) deposits so admin
+    // can verify the payment before approving.
+    if (!screenshotPreview) {
+      Alert.alert('Screenshot required', 'Please upload your payment screenshot to submit the deposit.');
+      return;
+    }
 
     const usdRaw = selectedCurrency && selectedCurrency.currency !== 'USD'
       ? calculateUSDAmount(parseFloat(localAmount), selectedCurrency)
@@ -383,21 +389,32 @@ const WalletScreen = ({ navigation }) => {
         return;
       }
 
-      const methodMap = { 'Bank Transfer': 'bank', 'UPI': 'upi', 'QR Code': 'qr', 'Crypto USDT': 'crypto_usdt' };
-      const method = methodMap[selectedMethod.type] || 'bank';
+      // Upload the payment screenshot as a real file (multipart) so the admin
+      // can actually view the proof. The JSON /wallet/deposit endpoint only
+      // stored a local URI string, which the server could not display.
+      const uri = screenshot?.uri || screenshotPreview;
+      let fileName = screenshot?.fileName || uri.split('/').pop() || `deposit_${Date.now()}.jpg`;
+      const ext = (fileName.split('.').pop() || '').toLowerCase();
+      if (!['jpg', 'jpeg', 'png', 'webp', 'pdf'].includes(ext)) fileName = `${fileName}.jpg`;
+      const mime =
+        ext === 'png' ? 'image/png' :
+        ext === 'webp' ? 'image/webp' :
+        ext === 'pdf' ? 'application/pdf' :
+        'image/jpeg';
 
-      const res = await fetch(`${API_URL}/wallet/deposit`, {
+      const formData = new FormData();
+      formData.append('account_id', String(liveAccount.id));
+      formData.append('amount', String(usdAmount));
+      formData.append('transaction_id', transactionRef.trim());
+      formData.append('file', { uri, name: fileName, type: screenshot?.mimeType || mime });
+
+      // NOTE: do not set Content-Type — fetch adds the multipart boundary itself.
+      const res = await fetch(`${API_URL}/wallet/deposit/manual`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({
-          account_id: liveAccount.id,
-          amount: usdAmount,
-          method,
-          transaction_id: transactionRef.trim() || undefined,
-          screenshot_url: screenshotPreview || undefined,
-        })
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData,
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         Alert.alert('Success', 'Deposit request submitted! Awaiting approval.');
         setShowDepositModal(false);
@@ -440,8 +457,12 @@ const WalletScreen = ({ navigation }) => {
       }
     }
 
-    // Validate UPI if UPI selected
+    // Validate UPI if UPI selected — name + UPI ID both required.
     if (selectedMethod.type === 'UPI') {
+      if (!bankDetails.accountHolderName || !bankDetails.accountHolderName.trim()) {
+        Alert.alert('Error', 'Please enter the account holder name');
+        return;
+      }
       if (!upiId) {
         Alert.alert('Error', 'Please enter UPI ID');
         return;
@@ -464,6 +485,7 @@ const WalletScreen = ({ navigation }) => {
         bankAccountDetails = {
           type: 'UPI',
           upiId: upiId,
+          accountHolderName: bankDetails.accountHolderName,
         };
       }
 
@@ -860,6 +882,15 @@ const WalletScreen = ({ navigation }) => {
                 )}
                 {selectedMethod.type === 'UPI' && bankInfo && bankInfo.upi_id && (
                   <>
+                    {(bankInfo.account_holder || bankInfo.account_name) ? (
+                      <TouchableOpacity style={styles.copyRow} onPress={() => { Clipboard.setStringAsync(bankInfo.account_holder || bankInfo.account_name); Alert.alert('Copied', 'Name copied!'); }}>
+                        <Text style={styles.detailRow}>
+                          <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Name: </Text>
+                          <Text style={[styles.detailValue, { color: colors.textPrimary }]}>{bankInfo.account_holder || bankInfo.account_name}</Text>
+                        </Text>
+                        <Ionicons name="copy-outline" size={16} color={colors.textMuted} />
+                      </TouchableOpacity>
+                    ) : null}
                     <TouchableOpacity style={styles.copyRow} onPress={() => { Clipboard.setStringAsync(bankInfo.upi_id); Alert.alert('Copied', 'UPI ID copied!'); }}>
                       <Text style={styles.detailRow}>
                         <Text style={[styles.detailLabel, { color: colors.textMuted }]}>UPI ID: </Text>
@@ -890,7 +921,7 @@ const WalletScreen = ({ navigation }) => {
             />
 
             {/* Payment Screenshot Upload */}
-            <Text style={[styles.inputLabel, { color: colors.textMuted }]}>Payment Screenshot (Proof)</Text>
+            <Text style={[styles.inputLabel, { color: colors.textMuted }]}>Payment Screenshot (Proof) *</Text>
             {screenshotPreview ? (
               <View style={{ marginBottom: 16 }}>
                 <Image 
@@ -1088,9 +1119,18 @@ const WalletScreen = ({ navigation }) => {
               </View>
             )}
 
-            {/* UPI Input Field */}
+            {/* UPI Input Fields */}
             {selectedMethod?.type === 'UPI' && (
               <View style={{ marginTop: 8 }}>
+                <Text style={[styles.inputLabel, { color: colors.textMuted }]}>Account Holder Name *</Text>
+                <TextInput
+                  style={[styles.input, { backgroundColor: colors.bgSecondary, borderColor: colors.border, color: colors.textPrimary }]}
+                  value={bankDetails.accountHolderName}
+                  onChangeText={(text) => setBankDetails({ ...bankDetails, accountHolderName: text })}
+                  placeholder="Enter name as per bank / UPI"
+                  placeholderTextColor={colors.textMuted}
+                />
+
                 <Text style={[styles.inputLabel, { color: colors.textMuted }]}>UPI ID *</Text>
                 <TextInput
                   style={[styles.input, { backgroundColor: colors.bgSecondary, borderColor: colors.border, color: colors.textPrimary }]}

@@ -6115,100 +6115,157 @@ const ChartTab = ({ route }) => {
     };
   }, [ctx.selectedAccount, ctx.selectedChallengeAccount, ctx.isChallengeMode]);
 
+  // ── Fast local candlestick chart (lightweight-charts) ────────────────────
+  // Renders our own candles fed by the app's price feed instead of embedding
+  // TradingView's heavy remote widget. The library (~45KB) loads once and is
+  // cached; switching symbols just re-injects data (no page reload), so the
+  // chart opens near-instantly.
+  const RES_SEC = 300; // 5-minute candles
+  const CRYPTO_BINANCE = useMemo(() => ({
+    BTCUSD: 'BTCUSDT', ETHUSD: 'ETHUSDT', LTCUSD: 'LTCUSDT', XRPUSD: 'XRPUSDT',
+    SOLUSD: 'SOLUSDT', BNBUSD: 'BNBUSDT', DOGEUSD: 'DOGEUSDT', ADAUSD: 'ADAUSDT',
+    TRXUSD: 'TRXUSDT', LINKUSD: 'LINKUSDT', DOTUSD: 'DOTUSDT', AVAXUSD: 'AVAXUSDT',
+  }), []);
+
+  const chartReadyRef = useRef(false);
+  const lastBarRef = useRef(null);
+  const barLoadGenRef = useRef(0);
+
+  // chartHtml depends ONLY on theme so the WebView never reloads on symbol change.
   const chartHtml = useMemo(() => {
-    const tvSym = getSymbolForTradingView(activeSymbol);
+    const txt = isDark ? '#cfcfcf' : '#333';
+    const grid = isDark ? '#1b1b1b' : '#eee';
+    const axis = isDark ? '#2a2a2a' : '#ddd';
+    const muted = isDark ? '#888' : '#999';
     return `<!DOCTYPE html>
 <html><head>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<style>*{margin:0;padding:0;box-sizing:border-box;}html,body{height:100%;width:100%;background:${chartBg};overflow:hidden;}</style>
+<style>*{margin:0;padding:0;box-sizing:border-box;}html,body,#c{height:100%;width:100%;background:${chartBg};overflow:hidden;}
+#status{position:absolute;top:50%;left:0;right:0;text-align:center;transform:translateY(-50%);color:${muted};font-family:-apple-system,Roboto,Helvetica,sans-serif;font-size:13px;}</style>
 </head><body>
-<div class="tradingview-widget-container" style="height:100%;width:100%">
-  <div id="tradingview_chart" style="height:100%;width:100%"></div>
-</div>
-<script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-<script type="text/javascript">
-new TradingView.widget({
-  "autosize": true,
-  "symbol": "${tvSym}",
-  "interval": "5",
-  "timezone": "Etc/UTC",
-  "theme": "${chartTheme}",
-  "style": "1",
-  "locale": "en",
-  "toolbar_bg": "${chartBg}",
-  "enable_publishing": false,
-  "hide_top_toolbar": false,
-  "hide_legend": false,
-  "hide_side_toolbar": false,
-  "save_image": false,
-  "container_id": "tradingview_chart",
-  "backgroundColor": "${chartBg}",
-  "withdateranges": true,
-  "allow_symbol_change": false,
-  "details": true,
-  "hotlist": false,
-  "calendar": false,
-  "show_popup_button": true,
-  "popup_width": "1000",
-  "popup_height": "650",
-  "studies": [],
-  "studies_overrides": {},
-  "overrides": {
-    "mainSeriesProperties.showPriceLine": true,
-    "mainSeriesProperties.highLowAvgPrice.highLowPriceLinesVisible": true,
-    "scalesProperties.showSeriesLastValue": true,
-    "scalesProperties.showStudyLastValue": true,
-    "paneProperties.legendProperties.showLegend": true,
-    "paneProperties.legendProperties.showSeriesTitle": true,
-    "paneProperties.legendProperties.showSeriesOHLC": true,
-    "paneProperties.legendProperties.showBarChange": true
+<div id="status">Loading chart…</div>
+<div id="c"></div>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+(function(){
+  function post(o){ try{ window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify(o)); }catch(e){} }
+  function start(){
+    if(!window.LightweightCharts){ setTimeout(start,40); return; }
+    var el=document.getElementById('c');
+    var st=document.getElementById('status');
+    var chart=LightweightCharts.createChart(el,{
+      width:el.clientWidth, height:el.clientHeight,
+      layout:{ background:{color:'${chartBg}'}, textColor:'${txt}' },
+      grid:{ vertLines:{color:'${grid}'}, horzLines:{color:'${grid}'} },
+      rightPriceScale:{ borderColor:'${axis}' },
+      timeScale:{ borderColor:'${axis}', timeVisible:true, secondsVisible:false },
+      crosshair:{ mode:0 }
+    });
+    var series=chart.addCandlestickSeries({
+      upColor:'#26a69a', downColor:'#ef5350', borderUpColor:'#26a69a',
+      borderDownColor:'#ef5350', wickUpColor:'#26a69a', wickDownColor:'#ef5350'
+    });
+    window.addEventListener('resize',function(){ chart.applyOptions({width:el.clientWidth,height:el.clientHeight}); });
+    window.__setBars=function(bars){
+      try{
+        if(bars && bars.length){ st.style.display='none'; series.setData(bars); chart.timeScale().fitContent(); }
+        else { st.style.display='block'; st.textContent='No chart data'; }
+      }catch(e){ post({type:'error',message:String(e)}); }
+    };
+    window.__update=function(bar){ try{ st.style.display='none'; series.update(bar); }catch(e){} };
+    post({type:'ready'});
   }
-});
+  start();
+})();
 </script>
 </body></html>`;
-  }, [activeSymbol, isDark, chartBg, chartTheme]);
+  }, [isDark, chartBg]);
 
-  // Push position + order updates into the chart WebView (no remount).
+  // Reset readiness when the WebView remounts (theme change).
+  useEffect(() => { chartReadyRef.current = false; }, [isDark]);
+
+  // Fetch ~500 historical 5-min candles for a symbol and push them in.
+  const loadHistory = useCallback(async (sym) => {
+    const symU = String(sym || '').toUpperCase();
+    const gen = ++barLoadGenRef.current;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const fromSec = nowSec - RES_SEC * 500;
+    let bars = [];
+    try {
+      if (CRYPTO_BINANCE[symU]) {
+        const url = `https://api.binance.com/api/v3/klines?symbol=${CRYPTO_BINANCE[symU]}&interval=5m&startTime=${fromSec * 1000}&endTime=${nowSec * 1000}&limit=1000`;
+        const r = await fetch(url);
+        const rows = await r.json();
+        if (Array.isArray(rows)) bars = rows.map((k) => ({ time: Math.floor(k[0] / 1000), open: +k[1], high: +k[2], low: +k[3], close: +k[4] }));
+      } else {
+        const token = chartJwt || (await SecureStore.getItemAsync('token'));
+        const r = await fetch(`${API_URL}/instruments/${encodeURIComponent(symU)}/bars?resolution=5&from=${fromSec}&to=${nowSec}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (r.ok) {
+          const data = await r.json().catch(() => ({}));
+          const raw = data && Array.isArray(data.bars) ? data.bars : (Array.isArray(data) ? data : []);
+          bars = raw.map((b) => {
+            let t = Number(b.time || b.t || 0);
+            if (t > 1e12) t = Math.floor(t / 1000);
+            return { time: t, open: +b.open, high: +b.high, low: +b.low, close: +b.close };
+          });
+        }
+      }
+    } catch (e) { /* network — fall through to empty */ }
+    if (gen !== barLoadGenRef.current) return; // a newer load started (symbol changed)
+    bars = bars
+      .filter((b) => Number.isFinite(b.open) && Number.isFinite(b.close) && b.time > 0)
+      .sort((a, b) => a.time - b.time);
+    const dedup = [];
+    for (const b of bars) {
+      if (dedup.length && dedup[dedup.length - 1].time === b.time) dedup[dedup.length - 1] = b;
+      else dedup.push(b);
+    }
+    lastBarRef.current = dedup.length ? { ...dedup[dedup.length - 1] } : null;
+    if (chartWebViewRef.current) {
+      try { chartWebViewRef.current.injectJavaScript(`window.__setBars && window.__setBars(${JSON.stringify(dedup)}); true;`); } catch (e) {}
+    }
+  }, [chartJwt, CRYPTO_BINANCE]);
+
+  // (Re)load history when the chart is ready or the symbol changes.
   useEffect(() => {
-    if (!chartWebViewRef.current) return;
-    const js = `window.INTRENDFX_API && window.INTRENDFX_API.setPositions(${JSON.stringify(positionsForChart)}, ${JSON.stringify(ordersForChart)}); true;`;
-    try { chartWebViewRef.current.injectJavaScript(js); } catch (e) {}
-  }, [positionsForChart, ordersForChart]);
+    if (!chartReadyRef.current) return;
+    loadHistory(activeSymbol);
+  }, [activeSymbol, loadHistory]);
 
-  // Push live ticks (fallback in case the WebView's WS connection is gated).
+  // Live tick → update/append the forming 5-min candle.
   useEffect(() => {
-    if (!chartWebViewRef.current) return;
-    if (!currentPrice.bid && !currentPrice.ask) return;
-    const js = `window.INTRENDFX_API && window.INTRENDFX_API.setLiveTick(${JSON.stringify(activeSymbol)}, ${currentPrice.bid || 0}, ${currentPrice.ask || 0}); true;`;
-    try { chartWebViewRef.current.injectJavaScript(js); } catch (e) {}
-  }, [activeSymbol, currentPrice.bid, currentPrice.ask]);
+    if (!chartReadyRef.current || !chartWebViewRef.current) return;
+    const bid = Number(currentPrice.bid) || 0;
+    const ask = Number(currentPrice.ask) || 0;
+    const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : (ask || bid);
+    if (!mid || mid <= 0) return;
+    const bucket = Math.floor(Date.now() / 1000 / RES_SEC) * RES_SEC;
+    let lb = lastBarRef.current;
+    if (!lb || bucket > lb.time) {
+      lb = { time: bucket, open: mid, high: mid, low: mid, close: mid };
+    } else if (bucket === lb.time) {
+      lb = { time: lb.time, open: lb.open, high: Math.max(lb.high, mid), low: Math.min(lb.low, mid), close: mid };
+    } else {
+      return; // stale clock — don't push a bar older than the last
+    }
+    lastBarRef.current = lb;
+    try { chartWebViewRef.current.injectJavaScript(`window.__update && window.__update(${JSON.stringify(lb)}); true;`); } catch (e) {}
+  }, [currentPrice.bid, currentPrice.ask]);
 
-  // Push token / account changes without remounting.
-  useEffect(() => {
-    if (!chartWebViewRef.current || !chartJwt) return;
-    const js = `window.INTRENDFX_API && window.INTRENDFX_API.setToken(${JSON.stringify(chartJwt)}); true;`;
-    try { chartWebViewRef.current.injectJavaScript(js); } catch (e) {}
-  }, [chartJwt]);
-
-  // When chart signals it's ready, push positions+orders+token immediately.
+  // On 'ready', mark loaded and pull the first history batch.
   const handleChartMessage = useCallback((event) => {
     try {
       const msg = JSON.parse(event?.nativeEvent?.data || '{}');
-      if (msg.type === 'ready' && chartWebViewRef.current) {
-        const js = `
-          window.INTRENDFX_API && window.INTRENDFX_API.setToken(${JSON.stringify(chartJwt)});
-          window.INTRENDFX_API && window.INTRENDFX_API.setPositions(${JSON.stringify(positionsForChart)}, ${JSON.stringify(ordersForChart)});
-          true;`;
-        try { chartWebViewRef.current.injectJavaScript(js); } catch (e) {}
-      } else if (msg.type === 'orderPlaced' || msg.type === 'positionClosed' || msg.type === 'bracketUpdated' || msg.type === 'orderCancelled') {
-        ctx.fetchOpenTrades?.();
-        ctx.fetchPendingOrders?.();
-        ctx.fetchAccountSummary?.();
+      if (msg.type === 'ready') {
+        chartReadyRef.current = true;
+        loadHistory(activeSymbol);
       } else if (msg.type === 'error') {
         console.warn('[Chart]', msg.message);
       }
     } catch (e) {}
-  }, [positionsForChart, ordersForChart, chartJwt, ctx]);
+  }, [loadHistory, activeSymbol]);
 
   const [showNewsTab, setShowNewsTab] = useState(false);
 
@@ -6371,8 +6428,9 @@ new TradingView.widget({
           {/* Simple TradingView embed widget (tv.js) — public-data candles. */}
           <WebView
             ref={chartWebViewRef}
-            key={`tv-${activeSymbol}-${isDark}`}
+            key={`lwc-${isDark}`}
             source={{ html: chartHtml }}
+            onMessage={handleChartMessage}
             style={{ flex: 1, backgroundColor: chartBg }}
             javaScriptEnabled={true}
             domStorageEnabled={true}
@@ -6381,6 +6439,16 @@ new TradingView.widget({
             mixedContentMode="always"
             allowsInlineMediaPlayback={true}
             androidLayerType="hardware"
+            // Cache the charting library so repeat opens are near-instant.
+            cacheEnabled={true}
+            cacheMode="LOAD_CACHE_ELSE_NETWORK"
+            startInLoadingState={true}
+            renderLoading={() => (
+              <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center', backgroundColor: chartBg }}>
+                <ActivityIndicator size="large" color={colors.primary} />
+                <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 10 }}>Loading chart…</Text>
+              </View>
+            )}
           />
         </View>
       )}
