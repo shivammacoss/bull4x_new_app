@@ -82,6 +82,78 @@ function getChartDataSource(symbol) {
   return { provider: 'yahoo', remote: sym };
 }
 
+// ─── Synthetic candle generation (mirrors web's datafeed) ───────────────
+// Backend stores little/no intraday history for forex/metals/indices, so an
+// empty /bars response would leave the chart with only the live forming
+// candle. The web trader solves this by generating deterministic synthetic
+// candles anchored to the current live price (see
+// intrendfx/frontend/trader/src/lib/charting/datafeed.ts). We do the same here
+// so the chart always renders a full history. Times are in UNIX seconds to
+// match the lightweight-charts series used below.
+const SYNTH_CRYPTO = new Set([
+  'BTCUSD', 'ETHUSD', 'LTCUSD', 'XRPUSD', 'SOLUSD', 'BNBUSD', 'DOGEUSD',
+  'ADAUSD', 'TRXUSD', 'LINKUSD', 'DOTUSD', 'AVAXUSD', 'MATICUSD', 'SHIBUSD',
+]);
+function syntheticCategory(sym) {
+  const s = String(sym || '').toUpperCase();
+  if (SYNTH_CRYPTO.has(s)) return 'crypto';
+  if (s.startsWith('XAU') || s.startsWith('XAG')) return 'metals';
+  if (['USOIL', 'UKOIL', 'NGAS'].includes(s)) return 'commodities';
+  if (['US30', 'US500', 'NAS100', 'US100', 'UK100', 'GER40', 'DE40', 'JPN225', 'HK50', 'AUS200'].includes(s)) return 'indices';
+  return 'forex';
+}
+
+function seededRand(seed) {
+  let s = Math.abs(seed) % 2147483647;
+  if (s === 0) s = 1;
+  return () => { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; };
+}
+
+// Build `count` candles ending at the current resolution bucket, drifting
+// around `mid`. Deterministic per symbol/day so the chart is stable across
+// reloads. Returns [{ time(sec), open, high, low, close }].
+function generateSyntheticBars(symbolU, mid, spread, resSec, count) {
+  if (!(mid > 0)) return [];
+  const cat = syntheticCategory(symbolU);
+  let volPct = 0.0003;
+  if (cat === 'metals') volPct = 0.0004;
+  else if (cat === 'indices') volPct = 0.0005;
+  else if (cat === 'commodities') volPct = 0.0006;
+  else if (cat === 'crypto') volPct = 0.001;
+  const resFactor = Math.sqrt(resSec / 300);
+  const volatility = Math.max((spread || 0) * 1.5, mid * volPct * resFactor);
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const toAligned = Math.floor(nowSec / resSec) * resSec;
+  const n = Math.max(1, Math.min(count, 500));
+  const startSec = toAligned - (n - 1) * resSec;
+
+  const seed = symbolU.split('').reduce((a, c) => a + c.charCodeAt(0), 0) + Math.floor(startSec / 86400);
+  const rand = seededRand(seed);
+
+  const increments = Array.from({ length: n }, () => (rand() - 0.5) * volatility * 2);
+  let cum = 0;
+  const cums = increments.map((inc) => { cum += inc; return cum; });
+  const lastCum = cums[cums.length - 1];
+  const prices = cums.map((c) => mid + (c - lastCum));
+
+  const bars = [];
+  let prev = mid - (cums[0] - lastCum);
+  for (let i = 0; i < n; i++) {
+    const open = prev;
+    const close = prices[i];
+    bars.push({
+      time: startSec + i * resSec,
+      open,
+      close,
+      high: Math.max(open, close) + Math.abs(rand() * volatility * 0.4),
+      low: Math.min(open, close) - Math.abs(rand() * volatility * 0.4),
+    });
+    prev = close;
+  }
+  return bars;
+}
+
 // Bootstrap script for the in-WebView chart (TradingView Charting Library).
 // Hosts the chart that web uses, with custom datafeed, broker_factory, and
 // the same entry/SL/TP horizontal_line overlay logic as
@@ -5889,6 +5961,10 @@ const ChartTab = ({ route }) => {
     bid: Number.isFinite(bidNum) && bidNum > 0 ? bidNum : 0,
     ask: Number.isFinite(askNum) && askNum > 0 ? askNum : 0,
   };
+  // Latest live price exposed to loadHistory (a useCallback) so synthetic
+  // candles can anchor to the current price without re-creating the callback.
+  const priceRef = useRef({ bid: 0, ask: 0 });
+  priceRef.current = currentPrice;
   const isForex = currentInstrument?.category === 'Forex';
   const decimals = isForex ? 5 : 2;
 
@@ -6217,11 +6293,37 @@ const ChartTab = ({ route }) => {
     bars = bars
       .filter((b) => Number.isFinite(b.open) && Number.isFinite(b.close) && b.time > 0)
       .sort((a, b) => a.time - b.time);
-    const dedup = [];
+    let dedup = [];
     for (const b of bars) {
       if (dedup.length && dedup[dedup.length - 1].time === b.time) dedup[dedup.length - 1] = b;
       else dedup.push(b);
     }
+
+    // If we still don't have a usable history, synthesize one. Forex/metals/
+    // indices rarely have intraday bars on the backend, and Binance is often
+    // geo-blocked (e.g. India) so crypto klines can fail too — either way the
+    // chart would otherwise show only the live forming candle. Mirror the web
+    // datafeed: build a full candle history anchored to the current live price.
+    // Wait briefly for a price tick if the WebSocket is still connecting.
+    if (dedup.length < 20) {
+      let mid = 0;
+      for (let i = 0; i < 20; i++) {
+        const p = priceRef.current || {};
+        const b = Number(p.bid) || 0;
+        const a = Number(p.ask) || 0;
+        mid = b > 0 && a > 0 ? (b + a) / 2 : (a || b);
+        if (mid > 0) break;
+        await new Promise((r) => setTimeout(r, 200)); // up to ~4s
+        if (gen !== barLoadGenRef.current) return; // symbol changed while waiting
+      }
+      if (mid > 0) {
+        const p = priceRef.current || {};
+        const spread = Math.abs((Number(p.ask) || 0) - (Number(p.bid) || 0));
+        const synth = generateSyntheticBars(symU, mid, spread, RES_SEC, 500);
+        if (synth.length > dedup.length) dedup = synth;
+      }
+    }
+
     lastBarRef.current = dedup.length ? { ...dedup[dedup.length - 1] } : null;
     if (chartWebViewRef.current) {
       try { chartWebViewRef.current.injectJavaScript(`window.__setBars && window.__setBars(${JSON.stringify(dedup)}); true;`); } catch (e) {}
