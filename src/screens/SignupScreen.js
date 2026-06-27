@@ -25,7 +25,9 @@ const SignupScreen = ({ navigation }) => {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [step, setStep] = useState(1); // Step 1: Personal Info, Step 2: Password
+  const [step, setStep] = useState(1); // 1: Personal Info, 2: Password, 3: Email OTP
+  const [otp, setOtp] = useState('');
+  const [resending, setResending] = useState(false);
   const [formData, setFormData] = useState({
     first_name: '',
     last_name: '',
@@ -53,13 +55,62 @@ const SignupScreen = ({ navigation }) => {
     setStep(2);
   };
 
-  const handleSignup = async () => {
+  // Step 2 → email a verification code, then advance to the OTP step.
+  const handleSendOtp = async () => {
     if (!formData.password || formData.password.length < 8) {
       Alert.alert('Error', 'Password must be at least 8 characters long');
       return;
     }
     if (formData.password !== formData.confirmPassword) {
       Alert.alert('Error', 'Passwords do not match');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch(`${AUTH_URL}/register/send-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: formData.email.trim().toLowerCase() }),
+      });
+      const text = await response.text();
+      let data = {};
+      try { data = JSON.parse(text); } catch (e) {}
+      if (!response.ok) {
+        const errorMsg = data.detail || data.message || `Could not send code (${response.status})`;
+        throw new Error(Array.isArray(errorMsg) ? errorMsg[0]?.msg || 'Validation error' : errorMsg);
+      }
+      setOtp('');
+      setStep(3);
+    } catch (error) {
+      Alert.alert('Error', error.message || 'Could not send verification code. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    setResending(true);
+    try {
+      const response = await fetch(`${AUTH_URL}/register/send-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: formData.email.trim().toLowerCase() }),
+      });
+      if (!response.ok) throw new Error('Could not resend code');
+      setOtp('');
+      Alert.alert('Code sent', 'A new verification code has been sent to your email.');
+    } catch (error) {
+      Alert.alert('Error', error.message || 'Could not resend code.');
+    } finally {
+      setResending(false);
+    }
+  };
+
+  // Step 3 → verify the OTP and create the account.
+  const handleSignup = async () => {
+    if (!otp || otp.trim().length < 4) {
+      Alert.alert('Error', 'Enter the 6-digit code sent to your email');
       return;
     }
 
@@ -72,6 +123,7 @@ const SignupScreen = ({ navigation }) => {
         last_name: formData.last_name.trim(),
         phone: formData.phone.trim() || undefined,
         referral_code: formData.referral_code.trim() || undefined,
+        otp: otp.trim(),
       };
 
       console.log('[Registration] Sending to:', `${AUTH_URL}/register`);
@@ -167,12 +219,14 @@ const SignupScreen = ({ navigation }) => {
           <View style={[styles.stepDot, step >= 1 && styles.stepDotActive]} />
           <View style={styles.stepLine} />
           <View style={[styles.stepDot, step >= 2 && styles.stepDotActive]} />
+          <View style={styles.stepLine} />
+          <View style={[styles.stepDot, step >= 3 && styles.stepDotActive]} />
         </View>
 
         {step === 1 ? (
           <>
             <Text style={styles.title}>Personal Details</Text>
-            <Text style={styles.subtitle}>Step 1 of 2 — Tell us about yourself</Text>
+            <Text style={styles.subtitle}>Step 1 of 3 — Tell us about yourself</Text>
 
             {/* First Name */}
             <View style={styles.inputContainer}>
@@ -252,10 +306,10 @@ const SignupScreen = ({ navigation }) => {
               </TouchableOpacity>
             </View>
           </>
-        ) : (
+        ) : step === 2 ? (
           <>
             <Text style={styles.title}>Set Password</Text>
-            <Text style={styles.subtitle}>Step 2 of 2 — Secure your account</Text>
+            <Text style={styles.subtitle}>Step 2 of 3 — Secure your account</Text>
 
             {/* Summary */}
             <View style={styles.summaryBox}>
@@ -311,16 +365,16 @@ const SignupScreen = ({ navigation }) => {
               </View>
             )}
 
-            {/* Create Account Button */}
+            {/* Continue → send email code */}
             <TouchableOpacity
               style={[styles.button, loading && styles.buttonDisabled]}
-              onPress={handleSignup}
+              onPress={handleSendOtp}
               disabled={loading}
             >
               {loading ? (
                 <ActivityIndicator color="#ffffff" />
               ) : (
-                <Text style={styles.buttonText}>Create Account</Text>
+                <Text style={styles.buttonText}>Continue</Text>
               )}
             </TouchableOpacity>
 
@@ -335,6 +389,50 @@ const SignupScreen = ({ navigation }) => {
               By creating an account, you agree to our{' '}
               <Text style={styles.termsLink}>Terms of Service</Text>
             </Text>
+          </>
+        ) : (
+          <>
+            <Text style={styles.title}>Verify your email</Text>
+            <Text style={styles.subtitle}>Step 3 of 3 — Enter the code sent to {formData.email}</Text>
+
+            {/* OTP */}
+            <View style={styles.inputContainer}>
+              <Ionicons name="shield-checkmark-outline" size={20} color="#666" style={styles.inputIcon} />
+              <TextInput
+                style={styles.input}
+                placeholder="6-digit code"
+                placeholderTextColor="#666"
+                keyboardType="number-pad"
+                maxLength={6}
+                value={otp}
+                onChangeText={(text) => setOtp(text.replace(/[^0-9]/g, '').slice(0, 6))}
+              />
+            </View>
+
+            {/* Verify & Create Account Button */}
+            <TouchableOpacity
+              style={[styles.button, loading && styles.buttonDisabled]}
+              onPress={handleSignup}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color="#ffffff" />
+              ) : (
+                <Text style={styles.buttonText}>Verify & Create Account</Text>
+              )}
+            </TouchableOpacity>
+
+            {/* Resend */}
+            <TouchableOpacity style={styles.backButton} onPress={handleResendOtp} disabled={resending}>
+              <Ionicons name="refresh" size={18} color="#1a73e8" />
+              <Text style={styles.backButtonText}>{resending ? 'Sending…' : 'Resend code'}</Text>
+            </TouchableOpacity>
+
+            {/* Back Button */}
+            <TouchableOpacity style={styles.backButton} onPress={() => setStep(2)}>
+              <Ionicons name="arrow-back" size={20} color="#1a73e8" />
+              <Text style={styles.backButtonText}>Back</Text>
+            </TouchableOpacity>
           </>
         )}
       </ScrollView>
