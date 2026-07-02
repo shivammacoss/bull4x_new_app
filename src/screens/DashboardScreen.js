@@ -305,8 +305,8 @@ const DashboardScreen = () => {
       {/* Top bar */}
       <View style={[S.topBar, { backgroundColor: colors.bgPrimary, borderBottomColor: colors.border }]}>
         <Text style={S.logo}>
-          <Text style={{ color: colors.textPrimary }}>inTrend</Text>
-          <Text style={{ color: colors.accent }}>FX</Text>
+          <Text style={{ color: colors.textPrimary }}>BULL</Text>
+          <Text style={{ color: colors.accent }}>4X</Text>
         </Text>
 
         <View style={S.topRight}>

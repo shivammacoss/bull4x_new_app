@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "inTrendFX",
+    "name": "Bull4x",
     "slug": "intrendfx",
     "version": "1.0.0",
     "runtimeVersion": "1.0.0",
@@ -31,7 +31,7 @@
           "NSAllowsArbitraryLoads": false,
           "NSAllowsLocalNetworking": true,
           "NSExceptionDomains": {
-            "intrendfx.com": {
+            "bull4x.com": {
               "NSIncludesSubdomains": true,
               "NSExceptionAllowsInsecureHTTPLoads": false,
               "NSExceptionRequiresForwardSecrecy": true,

@@ -75,6 +75,15 @@ const WalletScreen = ({ navigation }) => {
   const [creatingPayment, setCreatingPayment] = useState(false);
   const [showOxapayWeb, setShowOxapayWeb] = useState(false);
   const [oxapayUrl, setOxapayUrl] = useState('');
+  // Manual crypto deposit — admin-configured wallets (mirrors website)
+  const [cryptoWallets, setCryptoWallets] = useState([]);
+  const [selectedWallet, setSelectedWallet] = useState(null);
+  // Withdrawal: dedicated method + crypto address + payout QR image
+  const [wMethod, setWMethod] = useState(null); // 'Crypto' | 'UPI' | 'Bank Transfer'
+  const [wCrypto, setWCrypto] = useState({ address: '', network: 'TRC20' });
+  const [wQr, setWQr] = useState(null); // { uri, fileName, mimeType }
+  // Admin deposit/withdrawal min-max limits
+  const [limits, setLimits] = useState(null);
 
   // Refresh wallet data every time screen is focused
   useFocusEffect(
@@ -149,6 +158,14 @@ const WalletScreen = ({ navigation }) => {
     const t = setTimeout(() => fetchBankInfo(tierAmt), 400);
     return () => clearTimeout(t);
   }, [showDepositModal, localAmount, selectedCurrency]);
+
+  // Load crypto wallets + limits when the deposit modal opens; limits for withdraw.
+  useEffect(() => {
+    if (showDepositModal) { fetchCryptoWallets(); fetchLimits(); }
+  }, [showDepositModal]);
+  useEffect(() => {
+    if (showWithdrawModal) fetchLimits();
+  }, [showWithdrawModal]);
 
   const fetchWalletData = async () => {
     try {
@@ -236,15 +253,63 @@ const WalletScreen = ({ navigation }) => {
 
   const fetchPaymentMethods = async () => {
     setLoadingMethods(true);
-    // TrustEdge uses fixed methods; bank details fetched from /wallet/bank-info
+    // Fixed methods (mirror website): auto crypto (OxaPay), manual crypto
+    // (admin wallets + proof), bank transfer, and UPI.
     setPaymentMethods([
       { id: 'oxapay', type: 'Crypto', name: 'Crypto (Auto)' },
+      { id: 'crypto', type: 'Crypto', name: 'Crypto' },
       { id: 'bank', type: 'Bank Transfer', name: 'Bank Transfer' },
       { id: 'upi', type: 'UPI', name: 'UPI' },
     ]);
     setLoadingMethods(false);
     // Fetch bank/UPI details for displaying to user
     fetchBankInfo(localAmount || 100);
+  };
+
+  // Admin-configured crypto wallets to deposit into (mirrors website manual crypto).
+  const fetchCryptoWallets = async () => {
+    try {
+      const res = await authedFetch('/wallet/crypto-wallets');
+      const data = await res.json().catch(() => ({}));
+      const items = data.items || data || [];
+      const list = Array.isArray(items) ? items : [];
+      setCryptoWallets(list);
+      setSelectedWallet((prev) => prev || list[0] || null);
+    } catch (_) {}
+  };
+
+  // Admin deposit/withdrawal min-max (0 = no limit).
+  const fetchLimits = async () => {
+    try {
+      const res = await authedFetch('/wallet/payment-limits');
+      const data = await res.json().catch(() => ({}));
+      setLimits(data);
+    } catch (_) {}
+  };
+
+  const limitHint = (side) => {
+    if (!limits) return null;
+    const min = Number(side === 'deposit' ? limits.deposit_min : limits.withdrawal_min) || 0;
+    const max = Number(side === 'deposit' ? limits.deposit_max : limits.withdrawal_max) || 0;
+    if (!min && !max) return null;
+    const parts = [];
+    if (min) parts.push(`Min: $${min.toLocaleString()}`);
+    if (max) parts.push(`Max: $${max.toLocaleString()}`);
+    return parts.join(' · ');
+  };
+
+  // QR / payout image picker for manual crypto/bank withdrawal proof.
+  const pickWithdrawQr = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Allow photo access to upload your payout QR.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8 });
+    if (!result.canceled) {
+      const asset = result.assets[0];
+      setWQr({ uri: asset.uri, fileName: asset.fileName, mimeType: asset.mimeType });
+    }
   };
 
   const pickScreenshot = async () => {
@@ -354,8 +419,12 @@ const WalletScreen = ({ navigation }) => {
       Alert.alert('Error', 'Please select a payment method');
       return;
     }
+    if (selectedMethod.id === 'crypto' && !selectedWallet) {
+      Alert.alert('Error', 'Please select a crypto wallet to deposit into');
+      return;
+    }
     if (!transactionRef || transactionRef.trim() === '') {
-      Alert.alert('Error', 'Please enter the transaction ID/reference number');
+      Alert.alert('Error', selectedMethod.id === 'crypto' ? 'Please enter the blockchain transaction hash' : 'Please enter the transaction ID/reference number');
       return;
     }
     // Payment screenshot is mandatory for manual (bank/UPI) deposits so admin
@@ -406,6 +475,10 @@ const WalletScreen = ({ navigation }) => {
       formData.append('account_id', String(liveAccount.id));
       formData.append('amount', String(usdAmount));
       formData.append('transaction_id', transactionRef.trim());
+      // Manual crypto deposit → tell the backend which admin wallet was paid.
+      if (selectedMethod.id === 'crypto' && selectedWallet) {
+        formData.append('crypto_wallet_id', String(selectedWallet.id));
+      }
       formData.append('file', { uri, name: fileName, type: screenshot?.mimeType || mime });
 
       // NOTE: do not set Content-Type — fetch adds the multipart boundary itself.
@@ -434,97 +507,87 @@ const WalletScreen = ({ navigation }) => {
     setIsSubmitting(false);
   };
 
+  // Withdrawal — mirrors the website: manual multipart endpoint supporting
+  // Crypto (address + network + QR), UPI (id and/or QR) and Bank (packed details).
+  const availableForWithdrawal = () => Number(wallet.available_for_withdrawal ?? wallet.balance ?? 0);
+
   const handleWithdraw = async () => {
     const sanitized = sanitizeAmount(amount);
     if (!sanitized) {
       Alert.alert('Error', 'Please enter a valid amount (max $1,000,000)');
       return;
     }
-    if (sanitized > wallet.balance) {
-      Alert.alert('Error', 'Insufficient balance');
+    const available = availableForWithdrawal();
+    if (sanitized > available + 0.005) {
+      const pend = Number(wallet.pending_withdrawals || 0);
+      Alert.alert('Insufficient balance', pend > 0
+        ? `Available: $${available.toFixed(2)} ($${Number(wallet.balance || 0).toFixed(2)} balance − $${pend.toFixed(2)} pending).`
+        : `Available: $${available.toFixed(2)}.`);
       return;
     }
-    if (!selectedMethod) {
-      Alert.alert('Error', 'Please select a payment method');
+    if (!wMethod) {
+      Alert.alert('Error', 'Please select a payout method');
       return;
     }
-
-    // Validate bank details if Bank Transfer selected
-    if (selectedMethod.type === 'Bank Transfer') {
-      if (!bankDetails.accountHolderName || !bankDetails.bankName || !bankDetails.accountNumber || !bankDetails.ifscCode) {
-        Alert.alert('Error', 'Please fill all bank details');
-        return;
-      }
-    }
-
-    // Validate UPI if UPI selected — name + UPI ID both required.
-    if (selectedMethod.type === 'UPI') {
-      if (!bankDetails.accountHolderName || !bankDetails.accountHolderName.trim()) {
-        Alert.alert('Error', 'Please enter the account holder name');
-        return;
-      }
-      if (!upiId) {
-        Alert.alert('Error', 'Please enter UPI ID');
+    if (wMethod === 'Crypto') {
+      if (!wCrypto.address.trim()) { Alert.alert('Error', 'Enter your wallet address'); return; }
+      if (!wQr) { Alert.alert('Error', 'Upload your wallet QR image'); return; }
+    } else if (wMethod === 'UPI') {
+      if (!upiId.trim() && !wQr) { Alert.alert('Error', 'Enter your UPI ID or upload a payment QR'); return; }
+    } else if (wMethod === 'Bank Transfer') {
+      if (!bankDetails.bankName || !bankDetails.accountNumber || !bankDetails.ifscCode) {
+        Alert.alert('Error', 'Please fill bank name, account number and IFSC code');
         return;
       }
     }
 
     setIsSubmitting(true);
     try {
-      // Build bank account details based on payment method
-      let bankAccountDetails = null;
-      if (selectedMethod.type === 'Bank Transfer') {
-        bankAccountDetails = {
-          type: 'Bank',
-          bankName: bankDetails.bankName,
-          accountNumber: bankDetails.accountNumber,
-          ifscCode: bankDetails.ifscCode,
-          accountHolderName: bankDetails.accountHolderName,
-        };
-      } else if (selectedMethod.type === 'UPI') {
-        bankAccountDetails = {
-          type: 'UPI',
-          upiId: upiId,
-          accountHolderName: bankDetails.accountHolderName,
-        };
-      }
-
       const token = await SecureStore.getItemAsync('token');
+      const fd = new FormData();
+      fd.append('amount', String(parseFloat(amount)));
 
-      // Get user's first live trading account
-      const accountsRes = await fetch(`${API_URL}/accounts`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const accountsData = await accountsRes.json();
-      const accounts = accountsData.items || accountsData || [];
-      const liveAccount = accounts.find(a => !a.is_demo) || accounts[0];
-      if (!liveAccount) {
-        Alert.alert('Error', 'No trading account found. Please contact support.');
-        setIsSubmitting(false);
-        return;
+      if (wMethod === 'Crypto') {
+        fd.append('crypto_address', wCrypto.address.trim());
+        fd.append('crypto_network', wCrypto.network || '');
+      } else if (wMethod === 'UPI') {
+        if (upiId.trim()) fd.append('upi_id', upiId.trim());
+        if (bankDetails.bankName) fd.append('bank_name', bankDetails.bankName.trim());
+      } else if (wMethod === 'Bank Transfer') {
+        // Pack all bank fields into bank_name so admin sees them in one place (mirrors web).
+        fd.append('bank_name', `${bankDetails.bankName} | A/C: ${bankDetails.accountNumber} | IFSC: ${bankDetails.ifscCode}`);
       }
 
-      const methodMap = { 'Bank Transfer': 'bank', 'UPI': 'upi' };
-      const method = methodMap[selectedMethod.type] || 'bank';
+      // Attach payout QR / proof (required for crypto, optional for UPI/bank).
+      if (wQr) {
+        const uri = wQr.uri;
+        let fileName = wQr.fileName || uri.split('/').pop() || `payout_${Date.now()}.jpg`;
+        const ext = (fileName.split('.').pop() || '').toLowerCase();
+        if (!['jpg', 'jpeg', 'png', 'webp', 'pdf'].includes(ext)) fileName = `${fileName}.jpg`;
+        const mime =
+          ext === 'png' ? 'image/png' :
+          ext === 'webp' ? 'image/webp' :
+          ext === 'pdf' ? 'application/pdf' :
+          'image/jpeg';
+        fd.append('file', { uri, name: fileName, type: wQr.mimeType || mime });
+      }
 
-      const res = await fetch(`${API_URL}/wallet/withdraw`, {
+      // NOTE: no Content-Type — fetch adds the multipart boundary itself.
+      const res = await fetch(`${API_URL}/wallet/withdraw/manual`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({
-          account_id: liveAccount.id,
-          amount: parseFloat(amount),
-          method,
-          bank_details: bankAccountDetails,
-        })
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         Alert.alert('Success', 'Withdrawal request submitted! Awaiting approval.');
         setShowWithdrawModal(false);
         setAmount('');
-        setSelectedMethod(null);
-        setBankDetails({ bankName: '', accountNumber: '', ifscCode: '', accountHolderName: '' });
+        setWMethod(null);
         setUpiId('');
+        setBankDetails({ bankName: '', accountNumber: '', ifscCode: '', accountHolderName: '' });
+        setWCrypto({ address: '', network: 'TRC20' });
+        setWQr(null);
         fetchWalletData();
       } else {
         Alert.alert('Error', data.detail || data.message || 'Failed to submit withdrawal');
@@ -722,6 +785,9 @@ const WalletScreen = ({ navigation }) => {
               placeholderTextColor={colors.textMuted}
               keyboardType="numeric"
             />
+            {limitHint('deposit') && (
+              <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 4 }}>{limitHint('deposit')}</Text>
+            )}
 
             {/* USD Conversion Display */}
             {selectedCurrency && selectedCurrency.currency !== 'USD' && localAmount && parseFloat(localAmount) > 0 && (
@@ -739,7 +805,7 @@ const WalletScreen = ({ navigation }) => {
             {/* INR to pay — bank/UPI is paid in INR while the wallet is credited
                 in USD. Shows the user exactly how much INR to transfer. */}
             {(() => {
-              if (selectedMethod?.id === 'oxapay') return null;
+              if (selectedMethod?.id === 'oxapay' || selectedMethod?.id === 'crypto') return null;
               const inrRate = currencies.find(c => String(c.currency).toUpperCase() === 'INR')?.rateToUSD || 0;
               const amt = parseFloat(localAmount);
               if (!inrRate || !amt || amt <= 0) return null;
@@ -781,7 +847,7 @@ const WalletScreen = ({ navigation }) => {
                     onPress={() => setSelectedMethod(method)}
                   >
                     <Text style={[styles.methodName, { color: colors.textPrimary }, selectedMethod?.id === method.id && { color: '#fff' }]}>
-                      {method.type || method.name}
+                      {method.name || method.type}
                     </Text>
                   </TouchableOpacity>
                 ))}
@@ -817,6 +883,56 @@ const WalletScreen = ({ navigation }) => {
                     Auto deposit: pay on the secure OxaPay page and your wallet is credited automatically once the payment is confirmed. No screenshot needed.
                   </Text>
                 </View>
+              </View>
+            )}
+
+            {/* Manual Crypto — admin wallet address + QR (mirrors website) */}
+            {selectedMethod?.id === 'crypto' && (
+              <View style={[styles.methodDetails, { backgroundColor: colors.bgSecondary, borderColor: colors.border }]}>
+                <Text style={[styles.detailLabel, { color: colors.textMuted, marginBottom: 8 }]}>Select coin / network</Text>
+                {cryptoWallets.length === 0 ? (
+                  <Text style={{ color: colors.textMuted, fontSize: 12 }}>No crypto wallets available. Please contact support.</Text>
+                ) : (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                    {cryptoWallets.map((w) => {
+                      const sel = selectedWallet?.id === w.id;
+                      return (
+                        <TouchableOpacity
+                          key={w.id}
+                          onPress={() => setSelectedWallet(w)}
+                          style={{ paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, marginRight: 8, borderWidth: sel ? 2 : 1, borderColor: sel ? colors.accent : colors.border, backgroundColor: sel ? colors.accent + '15' : colors.bgCard, alignItems: 'center', minWidth: 76 }}
+                        >
+                          <Text style={{ color: sel ? colors.accent : colors.textPrimary, fontWeight: '700', fontSize: 14 }}>{w.coin}</Text>
+                          <Text style={{ color: colors.textMuted, fontSize: 10, marginTop: 2 }}>{w.network}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                )}
+                {selectedWallet && (
+                  <>
+                    <View style={styles.qrContainer}>
+                      <Image
+                        source={{ uri: `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(selectedWallet.address)}` }}
+                        style={styles.qrImage}
+                        resizeMode="contain"
+                      />
+                    </View>
+                    <TouchableOpacity style={styles.copyRow} onPress={() => { Clipboard.setStringAsync(selectedWallet.address); Alert.alert('Copied', 'Wallet address copied!'); }}>
+                      <Text style={styles.detailRow}>
+                        <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Address: </Text>
+                        <Text style={[styles.detailValue, { color: colors.textPrimary }]}>{selectedWallet.address}</Text>
+                      </Text>
+                      <Ionicons name="copy-outline" size={16} color={colors.textMuted} />
+                    </TouchableOpacity>
+                    <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 8 }}>
+                      <Ionicons name="warning-outline" size={16} color="#eab308" style={{ marginTop: 1 }} />
+                      <Text style={{ color: colors.textMuted, fontSize: 12, flex: 1, lineHeight: 17 }}>
+                        Send only {selectedWallet.coin} on the {selectedWallet.network} network — wrong network means lost funds. After paying, enter the transaction hash and upload a screenshot below.
+                      </Text>
+                    </View>
+                  </>
+                )}
               </View>
             )}
 
@@ -911,13 +1027,14 @@ const WalletScreen = ({ navigation }) => {
 
             {selectedMethod?.id !== 'oxapay' && (
             <>
-            <Text style={[styles.inputLabel, { color: colors.textMuted }]}>Transaction ID / Reference Number *</Text>
+            <Text style={[styles.inputLabel, { color: colors.textMuted }]}>{selectedMethod?.id === 'crypto' ? 'Transaction Hash *' : 'Transaction ID / Reference Number *'}</Text>
             <TextInput
               style={[styles.input, { backgroundColor: colors.bgSecondary, borderColor: colors.border, color: colors.textPrimary }]}
               value={transactionRef}
               onChangeText={setTransactionRef}
-              placeholder="Enter transaction ID or reference"
+              placeholder={selectedMethod?.id === 'crypto' ? 'Paste the blockchain transaction hash' : 'Enter transaction ID or reference'}
               placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
             />
 
             {/* Payment Screenshot Upload */}
@@ -1040,15 +1157,22 @@ const WalletScreen = ({ navigation }) => {
                 <TouchableOpacity onPress={() => {
                   setShowWithdrawModal(false);
                   setAmount('');
-                  setSelectedMethod(null);
+                  setWMethod(null);
+                  setUpiId('');
+                  setBankDetails({ bankName: '', accountNumber: '', ifscCode: '', accountHolderName: '' });
+                  setWCrypto({ address: '', network: 'TRC20' });
+                  setWQr(null);
                 }} style={{ padding: 4 }}>
                   <Ionicons name="close" size={24} color={colors.textMuted} />
                 </TouchableOpacity>
               </View>
 
             <View style={[styles.availableBalance, { backgroundColor: colors.bgSecondary, borderColor: colors.border }]}>
-              <Text style={[styles.availableLabel, { color: colors.textMuted }]}>Available Balance</Text>
-              <Text style={[styles.availableAmount, { color: colors.accent }]}>${wallet.balance?.toLocaleString()}</Text>
+              <Text style={[styles.availableLabel, { color: colors.textMuted }]}>Available for withdrawal</Text>
+              <Text style={[styles.availableAmount, { color: colors.accent }]}>${availableForWithdrawal().toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+              {Number(wallet.pending_withdrawals || 0) > 0 && (
+                <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>${Number(wallet.pending_withdrawals).toFixed(2)} pending</Text>
+              )}
             </View>
 
             <Text style={[styles.inputLabel, { color: colors.textMuted }]}>Amount (USD)</Text>
@@ -1061,23 +1185,70 @@ const WalletScreen = ({ navigation }) => {
               keyboardType="numeric"
             />
 
-            <Text style={[styles.inputLabel, { color: colors.textMuted }]}>Payment Method</Text>
+            {limitHint('withdrawal') && (
+              <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: -8, marginBottom: 8 }}>{limitHint('withdrawal')}</Text>
+            )}
+
+            {/* Method recommendation based on INR value (mirrors website) */}
+            {(() => {
+              const inrRate = currencies.find(c => String(c.currency).toUpperCase() === 'INR')?.rateToUSD || 0;
+              const amt = parseFloat(amount);
+              if (!inrRate || !amt || amt <= 0) return null;
+              const inr = amt * inrRate;
+              const rec = inr < 10000 ? 'UPI' : 'Bank Transfer';
+              return (
+                <View style={[styles.conversionBox, { marginBottom: 8 }]}>
+                  <Text style={styles.conversionLabel}>≈ ₹{inr.toLocaleString('en-IN', { maximumFractionDigits: 0 })} · Recommended: {rec}</Text>
+                  <Text style={styles.conversionRate}>{inr < 10000 ? 'UPI is faster for smaller amounts' : 'Bank transfer avoids UPI limits'}</Text>
+                </View>
+              );
+            })()}
+
+            <Text style={[styles.inputLabel, { color: colors.textMuted }]}>Payout Method</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.methodsScroll}>
-              {paymentMethods.filter(m => m.type !== 'QR Code').map((method) => (
+              {['Crypto', 'UPI', 'Bank Transfer'].map((m) => (
                 <TouchableOpacity
-                  key={method.id}
-                  style={[styles.methodCard, { backgroundColor: colors.bgSecondary, borderColor: colors.border }, selectedMethod?.id === method.id && styles.methodCardActive]}
-                  onPress={() => setSelectedMethod(method)}
+                  key={m}
+                  style={[styles.methodCard, { backgroundColor: colors.bgSecondary, borderColor: colors.border }, wMethod === m && styles.methodCardActive]}
+                  onPress={() => setWMethod(m)}
                 >
-                  <Text style={[styles.methodName, { color: colors.textPrimary }, selectedMethod?.id === method.id && { color: '#fff' }]}>
-                    {method.type || method.name}
-                  </Text>
+                  <Text style={[styles.methodName, { color: colors.textPrimary }, wMethod === m && { color: '#fff' }]}>{m}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
 
+            {/* Crypto payout — coin/network + address */}
+            {wMethod === 'Crypto' && (
+              <View style={{ marginTop: 8 }}>
+                <Text style={[styles.inputLabel, { color: colors.textMuted }]}>Coin / Network</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  {['TRC20', 'ERC20', 'BEP20', 'Bitcoin', 'Ethereum', 'Solana'].map((net) => {
+                    const sel = wCrypto.network === net;
+                    return (
+                      <TouchableOpacity
+                        key={net}
+                        onPress={() => setWCrypto({ ...wCrypto, network: net })}
+                        style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, marginRight: 8, marginBottom: 8, borderWidth: sel ? 2 : 1, borderColor: sel ? colors.accent : colors.border, backgroundColor: sel ? colors.accent + '15' : colors.bgCard }}
+                      >
+                        <Text style={{ color: sel ? colors.accent : colors.textPrimary, fontWeight: '600', fontSize: 13 }}>{net}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+                <Text style={[styles.inputLabel, { color: colors.textMuted }]}>Your Wallet Address *</Text>
+                <TextInput
+                  style={[styles.input, { backgroundColor: colors.bgSecondary, borderColor: colors.border, color: colors.textPrimary }]}
+                  value={wCrypto.address}
+                  onChangeText={(t) => setWCrypto({ ...wCrypto, address: t })}
+                  placeholder="Paste your wallet address"
+                  placeholderTextColor={colors.textMuted}
+                  autoCapitalize="none"
+                />
+              </View>
+            )}
+
             {/* Bank Transfer Input Fields */}
-            {selectedMethod?.type === 'Bank Transfer' && (
+            {wMethod === 'Bank Transfer' && (
               <View style={{ marginTop: 8 }}>
                 <Text style={[styles.inputLabel, { color: colors.textMuted }]}>Account Holder Name *</Text>
                 <TextInput
@@ -1120,18 +1291,9 @@ const WalletScreen = ({ navigation }) => {
             )}
 
             {/* UPI Input Fields */}
-            {selectedMethod?.type === 'UPI' && (
+            {wMethod === 'UPI' && (
               <View style={{ marginTop: 8 }}>
-                <Text style={[styles.inputLabel, { color: colors.textMuted }]}>Account Holder Name *</Text>
-                <TextInput
-                  style={[styles.input, { backgroundColor: colors.bgSecondary, borderColor: colors.border, color: colors.textPrimary }]}
-                  value={bankDetails.accountHolderName}
-                  onChangeText={(text) => setBankDetails({ ...bankDetails, accountHolderName: text })}
-                  placeholder="Enter name as per bank / UPI"
-                  placeholderTextColor={colors.textMuted}
-                />
-
-                <Text style={[styles.inputLabel, { color: colors.textMuted }]}>UPI ID *</Text>
+                <Text style={[styles.inputLabel, { color: colors.textMuted }]}>UPI ID</Text>
                 <TextInput
                   style={[styles.input, { backgroundColor: colors.bgSecondary, borderColor: colors.border, color: colors.textPrimary }]}
                   value={upiId}
@@ -1140,11 +1302,49 @@ const WalletScreen = ({ navigation }) => {
                   placeholderTextColor={colors.textMuted}
                   autoCapitalize="none"
                 />
+
+                <Text style={[styles.inputLabel, { color: colors.textMuted }]}>Bank Name (optional)</Text>
+                <TextInput
+                  style={[styles.input, { backgroundColor: colors.bgSecondary, borderColor: colors.border, color: colors.textPrimary }]}
+                  value={bankDetails.bankName}
+                  onChangeText={(text) => setBankDetails({ ...bankDetails, bankName: text })}
+                  placeholder="e.g. HDFC, SBI"
+                  placeholderTextColor={colors.textMuted}
+                />
+                <Text style={{ color: colors.textMuted, fontSize: 11, marginBottom: 4 }}>Provide your UPI ID or upload your UPI QR below.</Text>
               </View>
             )}
 
-            <TouchableOpacity 
-              style={[styles.submitBtn, { backgroundColor: colors.accent }, isSubmitting && styles.submitBtnDisabled]} 
+            {/* Payout QR — required for crypto, optional for UPI/bank */}
+            {wMethod && (
+              <>
+                <Text style={[styles.inputLabel, { color: colors.textMuted }]}>
+                  {wMethod === 'Crypto' ? 'Wallet QR Image *' : 'Payment QR (optional)'}
+                </Text>
+                {wQr ? (
+                  <View style={{ marginBottom: 16 }}>
+                    <Image source={{ uri: wQr.uri }} style={{ width: '100%', height: 180, borderRadius: 8, borderWidth: 1, borderColor: colors.border }} resizeMode="contain" />
+                    <TouchableOpacity
+                      onPress={() => setWQr(null)}
+                      style={{ position: 'absolute', top: 8, right: 8, backgroundColor: '#ef4444', borderRadius: 12, width: 24, height: 24, alignItems: 'center', justifyContent: 'center' }}
+                    >
+                      <Ionicons name="close" size={14} color="#fff" />
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <TouchableOpacity
+                    onPress={pickWithdrawQr}
+                    style={{ marginBottom: 16, padding: 20, borderWidth: 2, borderStyle: 'dashed', borderColor: colors.border, borderRadius: 8, alignItems: 'center', gap: 8 }}
+                  >
+                    <Ionicons name="qr-code-outline" size={28} color={colors.textMuted} />
+                    <Text style={{ color: colors.textMuted, fontSize: 14 }}>Tap to upload QR image</Text>
+                  </TouchableOpacity>
+                )}
+              </>
+            )}
+
+            <TouchableOpacity
+              style={[styles.submitBtn, { backgroundColor: colors.accent }, isSubmitting && styles.submitBtnDisabled]}
               onPress={handleWithdraw}
               disabled={isSubmitting}
             >

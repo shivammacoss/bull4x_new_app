@@ -12,6 +12,7 @@ import {
   Platform,
   StatusBar,
   Dimensions,
+  ImageBackground,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as SecureStore from 'expo-secure-store';
@@ -143,26 +144,18 @@ const LoginScreen = ({ navigation }) => {
   }
 
   return (
-    <KeyboardAvoidingView 
-      style={styles.container} 
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
-      <ScrollView 
-        style={styles.scrollView} 
+    <ImageBackground source={require('../../assets/auth-bg.png')} style={styles.bg} resizeMode="cover">
+      <View style={styles.scrim} />
+      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+      <ScrollView
+        style={styles.scrollView}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
-        {/* Logo */}
-        <View style={styles.logoContainer}>
-          <Image 
-            source={require('../../assets/intrendfx-logo-light.png')}
-            style={styles.logoImage}
-            resizeMode="contain"
-          />
-          <Text style={styles.brandName}>inTrendFX</Text>
-        </View>
-
         {/* Tab Switcher */}
         <View style={styles.tabContainer}>
           <TouchableOpacity 
@@ -181,11 +174,11 @@ const LoginScreen = ({ navigation }) => {
 
         {/* Email Input */}
         <View style={styles.inputContainer}>
-          <Ionicons name="mail-outline" size={20} color="#666" style={styles.inputIcon} />
+          <Ionicons name="mail-outline" size={20} color="#cbd5e1" style={styles.inputIcon} />
           <TextInput
             style={styles.input}
             placeholder="Email address"
-            placeholderTextColor="#666"
+            placeholderTextColor="#94a3b8"
             keyboardType="email-address"
             autoCapitalize="none"
             value={formData.email}
@@ -195,17 +188,17 @@ const LoginScreen = ({ navigation }) => {
 
         {/* Password Input */}
         <View style={styles.inputContainer}>
-          <Ionicons name="lock-closed-outline" size={20} color="#666" style={styles.inputIcon} />
+          <Ionicons name="lock-closed-outline" size={20} color="#cbd5e1" style={styles.inputIcon} />
           <TextInput
             style={styles.input}
             placeholder="Password"
-            placeholderTextColor="#666"
+            placeholderTextColor="#94a3b8"
             secureTextEntry={!showPassword}
             value={formData.password}
             onChangeText={(text) => setFormData({ ...formData, password: text })}
           />
           <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
-            <Ionicons name={showPassword ? "eye-outline" : "eye-off-outline"} size={20} color="#666" />
+            <Ionicons name={showPassword ? "eye-outline" : "eye-off-outline"} size={20} color="#cbd5e1" />
           </TouchableOpacity>
         </View>
 
@@ -237,23 +230,32 @@ const LoginScreen = ({ navigation }) => {
           </TouchableOpacity>
         </View>
       </ScrollView>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </ImageBackground>
   );
 };
 
 const styles = StyleSheet.create({
+  bg: {
+    flex: 1,
+  },
+  scrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(4,9,25,0.55)',
+  },
   container: {
     flex: 1,
-    backgroundColor: '#ffffff',
+    backgroundColor: 'transparent',
   },
   scrollView: {
     flex: 1,
   },
   content: {
     padding: 24,
-    paddingTop: Platform.OS === 'ios' ? 60 : 40,
+    paddingTop: height * 0.42,
     paddingBottom: 40,
     minHeight: height,
+    justifyContent: 'flex-end',
   },
   logoContainer: {
     alignItems: 'center',
@@ -284,7 +286,9 @@ const styles = StyleSheet.create({
   },
   tabContainer: {
     flexDirection: 'row',
-    backgroundColor: '#f2f4f7',
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
     borderRadius: 12,
     padding: 4,
     marginBottom: 32,
@@ -299,7 +303,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#1a73e8',
   },
   tabText: {
-    color: '#666',
+    color: 'rgba(255,255,255,0.7)',
     fontSize: 15,
     fontWeight: '600',
   },
@@ -311,20 +315,20 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 28,
     fontWeight: 'bold',
-    color: '#111',
+    color: '#ffffff',
     marginBottom: 8,
   },
   subtitle: {
     fontSize: 15,
-    color: '#666',
+    color: 'rgba(255,255,255,0.75)',
     marginBottom: 32,
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f7f8fa',
+    backgroundColor: 'rgba(255,255,255,0.08)',
     borderWidth: 1,
-    borderColor: '#e1e4e8',
+    borderColor: 'rgba(255,255,255,0.18)',
     borderRadius: 12,
     marginBottom: 16,
     paddingHorizontal: 16,
@@ -335,7 +339,7 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     paddingVertical: 16,
-    color: '#111',
+    color: '#ffffff',
     fontSize: 16,
   },
   eyeIcon: {
@@ -400,7 +404,7 @@ const styles = StyleSheet.create({
     marginTop: 32,
   },
   signupText: {
-    color: '#666',
+    color: 'rgba(255,255,255,0.8)',
     fontSize: 15,
   },
   signupLink: {

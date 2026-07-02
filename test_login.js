@@ -1,5 +1,5 @@
-// Test inTrendFX Login API
-const API_URL = 'https://api.intrendfx.com/api/v1';
+// Test BULL4X Login API
+const API_URL = 'https://api.bull4x.com/api/v1';
 
 async function testLogin() {
   console.log('Testing inTrendFX Login API...\n');

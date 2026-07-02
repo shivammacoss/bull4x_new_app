@@ -251,7 +251,7 @@ const IBScreen = ({ navigation, route }) => {
     if (!link && !code) return;
     try {
       await Share.share({
-        message: `Join me on inTrendFX — use my referral code: ${code}\n\nSign up: ${link || ''}`,
+        message: `Join me on BULL4X — use my referral code: ${code}\n\nSign up: ${link || ''}`,
       });
     } catch (e) {
       console.error('Error sharing:', e);

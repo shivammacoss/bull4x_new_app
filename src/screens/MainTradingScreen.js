@@ -159,7 +159,7 @@ function generateSyntheticBars(symbolU, mid, spread, resSec, count) {
 // the same entry/SL/TP horizontal_line overlay logic as
 // intrendfx/frontend/trader/src/components/charts/ChartPositionOverlay.tsx.
 //
-// Loaded with baseUrl = https://intrendfx.com/, so /charting_library/ resolves
+// Loaded with baseUrl = https://bull4x.com/, so /charting_library/ resolves
 // to the production server where the library is already hosted.
 const CHART_BOOTSTRAP_JS = String.raw`
 (function () {
@@ -179,8 +179,8 @@ const CHART_BOOTSTRAP_JS = String.raw`
   var TXT       = cfg.isDark ? '#aaaaaa' : '#555555';
   var DECIMALS  = Number(cfg.decimals  || 5);
   var TOKEN     = String(cfg.token || '');
-  var API_BASE  = String(cfg.apiUrl  || 'https://api.intrendfx.com/api/v1').replace(/\/+$/, '');
-  var WS_URL    = String(cfg.wsUrl   || 'wss://api.intrendfx.com');
+  var API_BASE  = String(cfg.apiUrl  || 'https://api.bull4x.com/api/v1').replace(/\/+$/, '');
+  var WS_URL    = String(cfg.wsUrl   || 'wss://api.bull4x.com');
   var INSTRUMENTS = Array.isArray(cfg.instruments) ? cfg.instruments : [];
   var ACCOUNT   = cfg.account || null;
 
@@ -250,7 +250,7 @@ const CHART_BOOTSTRAP_JS = String.raw`
           supported_resolutions: SUPPORTED_RESOLUTIONS,
           exchanges: [
             { value: '', name: 'All', desc: 'All exchanges' },
-            { value: 'inTrendFX', name: 'inTrendFX', desc: 'inTrendFX' },
+            { value: 'BULL4X', name: 'BULL4X', desc: 'BULL4X' },
           ],
           symbols_types: [
             { name: 'All', value: '' },
@@ -278,16 +278,16 @@ const CHART_BOOTSTRAP_JS = String.raw`
         if (symbolType && typ !== symbolType) continue;
         if (q && sym.indexOf(q) === -1) continue;
         out.push({
-          symbol: sym, full_name: 'inTrendFX:' + sym, ticker: sym,
+          symbol: sym, full_name: 'BULL4X:' + sym, ticker: sym,
           description: inst.display_name || inst.name || sym,
-          exchange: 'inTrendFX', type: typ,
+          exchange: 'BULL4X', type: typ,
         });
       }
       onResult(out);
     },
 
     resolveSymbol: function (symbolName, onResolve, onError) {
-      var sym = String(symbolName || '').toUpperCase().replace(/^INTRENDFX:/, '');
+      var sym = String(symbolName || '').toUpperCase().replace(/^BULL4X:/, '');
       var inst = findInstrument(sym);
       var digits = inst && (inst.digits || inst.precision);
       if (!digits) digits = (sym.indexOf('JPY') >= 0) ? 3 : (isBinanceSym(sym) ? 2 : DECIMALS);
@@ -299,7 +299,7 @@ const CHART_BOOTSTRAP_JS = String.raw`
           description: (inst && (inst.display_name || inst.name)) || sym,
           type: typ,
           session: '24x7', timezone: 'Etc/UTC',
-          exchange: 'inTrendFX', listed_exchange: 'inTrendFX',
+          exchange: 'BULL4X', listed_exchange: 'BULL4X',
           format: 'price',
           pricescale: pricescale, minmov: 1,
           has_intraday: true, has_daily: true, has_weekly_and_monthly: false,
@@ -2048,7 +2048,7 @@ const HomeTab = ({ navigation }) => {
     { icon: 'bar-chart-outline', label: 'PAMM', screen: 'Pamm' },
     { icon: 'copy-outline', label: 'Copy Trading', screen: 'CopyTrade' },
     { icon: 'people-outline', label: 'Affiliates', screen: 'Business', params: { initialTab: 'ib' } },
-    { icon: 'school-outline', label: 'inTrendFX Academy', screen: 'Academy' },
+    { icon: 'school-outline', label: 'BULL4X Academy', screen: 'Academy' },
     { icon: 'newspaper-outline', label: 'Economic News', screen: 'EconomicCalendar' },
     { icon: 'calculator-outline', label: 'Risk Calculator', screen: 'RiskCalculator' },
     { icon: 'book-outline', label: 'Orders', screen: 'OrderBook' },
@@ -3344,8 +3344,8 @@ const HomeTab = ({ navigation }) => {
                   resizeMode="contain"
                 />
                 <Text style={{ fontSize: 17, fontWeight: '800', letterSpacing: -0.3 }}>
-                  <Text style={{ color: colors.textPrimary }}>inTrendFX</Text>
-                  <Text style={{ color: colors.primary }}>FX</Text>
+                  <Text style={{ color: colors.textPrimary }}>BULL</Text>
+                  <Text style={{ color: colors.primary }}>4X</Text>
                 </Text>
               </View>
               <TouchableOpacity onPress={() => closeDrawer()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
@@ -6126,7 +6126,7 @@ const ChartTab = ({ route }) => {
   const chartBg = isDark ? '#121212' : '#ffffff';
 
   // ── Single chart: TradingView Charting Library (loaded from web's host).
-  // Loaded with baseUrl https://intrendfx.com/ so /charting_library/* resolves
+  // Loaded with baseUrl https://bull4x.com/ so /charting_library/* resolves
   // to the production server where the library is already hosted.
   const chartWebViewRef = useRef(null);
   const [chartJwt, setChartJwt] = useState('');

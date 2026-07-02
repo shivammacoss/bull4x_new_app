@@ -102,7 +102,7 @@ export default {
 
   // Academy
   academy: {
-    title: 'inTrendFX Academy',
+    title: 'BULL4X Academy',
     subtitle: 'Master Forex Trading from Beginner to Professional',
     phases: 'Phases',
     modules: 'Modules',

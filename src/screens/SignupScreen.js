@@ -12,6 +12,7 @@ import {
   Platform,
   StatusBar,
   Dimensions,
+  ImageBackground,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as SecureStore from 'expo-secure-store';
@@ -55,7 +56,9 @@ const SignupScreen = ({ navigation }) => {
     setStep(2);
   };
 
-  // Step 2 → email a verification code, then advance to the OTP step.
+  // Step 2 → create the account directly. The backend has no email-OTP step
+  // for registration (POST /auth/register creates the account in one call,
+  // same as the web app), so we register here instead of sending a code.
   const handleSendOtp = async () => {
     if (!formData.password || formData.password.length < 8) {
       Alert.alert('Error', 'Password must be at least 8 characters long');
@@ -68,22 +71,63 @@ const SignupScreen = ({ navigation }) => {
 
     setLoading(true);
     try {
-      const response = await fetch(`${AUTH_URL}/register/send-otp`, {
+      const registerData = {
+        email: formData.email.trim().toLowerCase(),
+        password: formData.password,
+        first_name: formData.first_name.trim(),
+        last_name: formData.last_name.trim(),
+        phone: formData.phone.trim() || undefined,
+        referral_code: formData.referral_code.trim() || undefined,
+      };
+
+      console.log('[Registration] Sending to:', `${AUTH_URL}/register`);
+
+      const response = await fetch(`${AUTH_URL}/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: formData.email.trim().toLowerCase() }),
+        body: JSON.stringify(registerData),
       });
-      const text = await response.text();
-      let data = {};
-      try { data = JSON.parse(text); } catch (e) {}
+
+      const responseText = await response.text();
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        throw new Error(`Server error: ${responseText.substring(0, 100)}`);
+      }
+
+      console.log('[Registration] Response status:', response.status, data);
+
       if (!response.ok) {
-        const errorMsg = data.detail || data.message || `Could not send code (${response.status})`;
+        const errorMsg = data.detail || data.message || `Registration failed (${response.status})`;
         throw new Error(Array.isArray(errorMsg) ? errorMsg[0]?.msg || 'Validation error' : errorMsg);
       }
-      setOtp('');
-      setStep(3);
+
+      if (data.access_token) {
+        await SecureStore.setItemAsync('token', data.access_token);
+        const userInfo = {
+          id: data.user_id,
+          email: formData.email.trim().toLowerCase(),
+          role: data.role,
+          expires_at: data.expires_at,
+        };
+        await SecureStore.setItemAsync('user', JSON.stringify(userInfo));
+        // Persist credentials for silent token refresh on expiry.
+        await SecureStore.setItemAsync('savedEmail', formData.email.trim().toLowerCase());
+        if (formData.password) {
+          await SecureStore.setItemAsync('savedPassword', formData.password);
+        }
+        navigation.replace('MainTrading');
+      } else {
+        Alert.alert(
+          'Account Created!',
+          'Your account has been created. Please login to continue.',
+          [{ text: 'OK', onPress: () => navigation.replace('Login') }]
+        );
+      }
     } catch (error) {
-      Alert.alert('Error', error.message || 'Could not send verification code. Please try again.');
+      console.error('Registration error:', error);
+      Alert.alert('Registration Error', error.message || 'Registration failed. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -180,27 +224,19 @@ const SignupScreen = ({ navigation }) => {
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+    <ImageBackground source={require('../../assets/auth-bg.png')} style={styles.bg} resizeMode="cover">
+      <View style={styles.scrim} />
+      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Logo */}
-        <View style={styles.logoContainer}>
-          <Image
-            source={require('../../assets/intrendfx-logo-light.png')}
-            style={styles.logoImage}
-            resizeMode="contain"
-          />
-          <Text style={styles.brandName}>inTrendFX</Text>
-        </View>
-
         {/* Tab Switcher */}
         <View style={styles.tabContainer}>
           <TouchableOpacity style={[styles.tab, styles.activeTab]}>
@@ -219,22 +255,20 @@ const SignupScreen = ({ navigation }) => {
           <View style={[styles.stepDot, step >= 1 && styles.stepDotActive]} />
           <View style={styles.stepLine} />
           <View style={[styles.stepDot, step >= 2 && styles.stepDotActive]} />
-          <View style={styles.stepLine} />
-          <View style={[styles.stepDot, step >= 3 && styles.stepDotActive]} />
         </View>
 
         {step === 1 ? (
           <>
             <Text style={styles.title}>Personal Details</Text>
-            <Text style={styles.subtitle}>Step 1 of 3 — Tell us about yourself</Text>
+            <Text style={styles.subtitle}>Step 1 of 2 — Tell us about yourself</Text>
 
             {/* First Name */}
             <View style={styles.inputContainer}>
-              <Ionicons name="person-outline" size={20} color="#666" style={styles.inputIcon} />
+              <Ionicons name="person-outline" size={20} color="#cbd5e1" style={styles.inputIcon} />
               <TextInput
                 style={styles.input}
                 placeholder="First name"
-                placeholderTextColor="#666"
+                placeholderTextColor="#94a3b8"
                 value={formData.first_name}
                 onChangeText={(text) => setFormData({ ...formData, first_name: text })}
               />
@@ -242,11 +276,11 @@ const SignupScreen = ({ navigation }) => {
 
             {/* Last Name */}
             <View style={styles.inputContainer}>
-              <Ionicons name="person-outline" size={20} color="#666" style={styles.inputIcon} />
+              <Ionicons name="person-outline" size={20} color="#cbd5e1" style={styles.inputIcon} />
               <TextInput
                 style={styles.input}
                 placeholder="Last name"
-                placeholderTextColor="#666"
+                placeholderTextColor="#94a3b8"
                 value={formData.last_name}
                 onChangeText={(text) => setFormData({ ...formData, last_name: text })}
               />
@@ -254,11 +288,11 @@ const SignupScreen = ({ navigation }) => {
 
             {/* Email */}
             <View style={styles.inputContainer}>
-              <Ionicons name="mail-outline" size={20} color="#666" style={styles.inputIcon} />
+              <Ionicons name="mail-outline" size={20} color="#cbd5e1" style={styles.inputIcon} />
               <TextInput
                 style={styles.input}
                 placeholder="Email address"
-                placeholderTextColor="#666"
+                placeholderTextColor="#94a3b8"
                 keyboardType="email-address"
                 autoCapitalize="none"
                 value={formData.email}
@@ -268,11 +302,11 @@ const SignupScreen = ({ navigation }) => {
 
             {/* Phone (optional) */}
             <View style={styles.inputContainer}>
-              <Ionicons name="call-outline" size={20} color="#666" style={styles.inputIcon} />
+              <Ionicons name="call-outline" size={20} color="#cbd5e1" style={styles.inputIcon} />
               <TextInput
                 style={styles.input}
                 placeholder="Phone number (optional)"
-                placeholderTextColor="#666"
+                placeholderTextColor="#94a3b8"
                 keyboardType="phone-pad"
                 value={formData.phone}
                 onChangeText={(text) => setFormData({ ...formData, phone: text })}
@@ -281,11 +315,11 @@ const SignupScreen = ({ navigation }) => {
 
             {/* Referral Code (optional) */}
             <View style={styles.inputContainer}>
-              <Ionicons name="gift-outline" size={20} color="#666" style={styles.inputIcon} />
+              <Ionicons name="gift-outline" size={20} color="#cbd5e1" style={styles.inputIcon} />
               <TextInput
                 style={styles.input}
                 placeholder="Referral code (optional)"
-                placeholderTextColor="#666"
+                placeholderTextColor="#94a3b8"
                 autoCapitalize="characters"
                 value={formData.referral_code}
                 onChangeText={(text) => setFormData({ ...formData, referral_code: text })}
@@ -309,7 +343,7 @@ const SignupScreen = ({ navigation }) => {
         ) : step === 2 ? (
           <>
             <Text style={styles.title}>Set Password</Text>
-            <Text style={styles.subtitle}>Step 2 of 3 — Secure your account</Text>
+            <Text style={styles.subtitle}>Step 2 of 2 — Secure your account</Text>
 
             {/* Summary */}
             <View style={styles.summaryBox}>
@@ -321,33 +355,33 @@ const SignupScreen = ({ navigation }) => {
 
             {/* Password */}
             <View style={styles.inputContainer}>
-              <Ionicons name="lock-closed-outline" size={20} color="#666" style={styles.inputIcon} />
+              <Ionicons name="lock-closed-outline" size={20} color="#cbd5e1" style={styles.inputIcon} />
               <TextInput
                 style={styles.input}
                 placeholder="Password (min 8 characters)"
-                placeholderTextColor="#666"
+                placeholderTextColor="#94a3b8"
                 secureTextEntry={!showPassword}
                 value={formData.password}
                 onChangeText={(text) => setFormData({ ...formData, password: text })}
               />
               <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
-                <Ionicons name={showPassword ? 'eye-outline' : 'eye-off-outline'} size={20} color="#666" />
+                <Ionicons name={showPassword ? 'eye-outline' : 'eye-off-outline'} size={20} color="#cbd5e1" />
               </TouchableOpacity>
             </View>
 
             {/* Confirm Password */}
             <View style={styles.inputContainer}>
-              <Ionicons name="lock-closed-outline" size={20} color="#666" style={styles.inputIcon} />
+              <Ionicons name="lock-closed-outline" size={20} color="#cbd5e1" style={styles.inputIcon} />
               <TextInput
                 style={styles.input}
                 placeholder="Confirm password"
-                placeholderTextColor="#666"
+                placeholderTextColor="#94a3b8"
                 secureTextEntry={!showConfirmPassword}
                 value={formData.confirmPassword}
                 onChangeText={(text) => setFormData({ ...formData, confirmPassword: text })}
               />
               <TouchableOpacity onPress={() => setShowConfirmPassword(!showConfirmPassword)} style={styles.eyeIcon}>
-                <Ionicons name={showConfirmPassword ? 'eye-outline' : 'eye-off-outline'} size={20} color="#666" />
+                <Ionicons name={showConfirmPassword ? 'eye-outline' : 'eye-off-outline'} size={20} color="#cbd5e1" />
               </TouchableOpacity>
             </View>
 
@@ -365,7 +399,7 @@ const SignupScreen = ({ navigation }) => {
               </View>
             )}
 
-            {/* Continue → send email code */}
+            {/* Create the account directly (no OTP step on the backend) */}
             <TouchableOpacity
               style={[styles.button, loading && styles.buttonDisabled]}
               onPress={handleSendOtp}
@@ -374,7 +408,7 @@ const SignupScreen = ({ navigation }) => {
               {loading ? (
                 <ActivityIndicator color="#ffffff" />
               ) : (
-                <Text style={styles.buttonText}>Continue</Text>
+                <Text style={styles.buttonText}>Create Account</Text>
               )}
             </TouchableOpacity>
 
@@ -397,11 +431,11 @@ const SignupScreen = ({ navigation }) => {
 
             {/* OTP */}
             <View style={styles.inputContainer}>
-              <Ionicons name="shield-checkmark-outline" size={20} color="#666" style={styles.inputIcon} />
+              <Ionicons name="shield-checkmark-outline" size={20} color="#cbd5e1" style={styles.inputIcon} />
               <TextInput
                 style={styles.input}
                 placeholder="6-digit code"
-                placeholderTextColor="#666"
+                placeholderTextColor="#94a3b8"
                 keyboardType="number-pad"
                 maxLength={6}
                 value={otp}
@@ -436,21 +470,29 @@ const SignupScreen = ({ navigation }) => {
           </>
         )}
       </ScrollView>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </ImageBackground>
   );
 };
 
 const styles = StyleSheet.create({
+  bg: {
+    flex: 1,
+  },
+  scrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(4,9,25,0.6)',
+  },
   container: {
     flex: 1,
-    backgroundColor: '#ffffff',
+    backgroundColor: 'transparent',
   },
   scrollView: {
     flex: 1,
   },
   content: {
     padding: 24,
-    paddingTop: Platform.OS === 'ios' ? 60 : 40,
+    paddingTop: Platform.OS === 'ios' ? 90 : 70,
     paddingBottom: 40,
   },
   logoContainer: {
@@ -462,14 +504,16 @@ const styles = StyleSheet.create({
     height: 120,
   },
   brandName: {
-    color: '#111',
+    color: '#ffffff',
     fontSize: 22,
     fontWeight: 'bold',
     marginTop: 12,
   },
   tabContainer: {
     flexDirection: 'row',
-    backgroundColor: '#f2f4f7',
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
     borderRadius: 12,
     padding: 4,
     marginBottom: 24,
@@ -484,7 +528,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#1a73e8',
   },
   tabText: {
-    color: '#666',
+    color: 'rgba(255,255,255,0.7)',
     fontSize: 15,
     fontWeight: '600',
   },
@@ -504,7 +548,7 @@ const styles = StyleSheet.create({
     width: 10,
     height: 10,
     borderRadius: 5,
-    backgroundColor: '#d0d5dd',
+    backgroundColor: 'rgba(255,255,255,0.25)',
   },
   stepDotActive: {
     backgroundColor: '#1a73e8',
@@ -512,27 +556,27 @@ const styles = StyleSheet.create({
   stepLine: {
     flex: 1,
     height: 2,
-    backgroundColor: '#d0d5dd',
+    backgroundColor: 'rgba(255,255,255,0.25)',
     marginHorizontal: 8,
     maxWidth: 60,
   },
   title: {
     fontSize: 26,
     fontWeight: 'bold',
-    color: '#111',
+    color: '#ffffff',
     marginBottom: 6,
   },
   subtitle: {
     fontSize: 14,
-    color: '#666',
+    color: 'rgba(255,255,255,0.75)',
     marginBottom: 28,
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f7f8fa',
+    backgroundColor: 'rgba(255,255,255,0.08)',
     borderWidth: 1,
-    borderColor: '#e1e4e8',
+    borderColor: 'rgba(255,255,255,0.18)',
     borderRadius: 12,
     marginBottom: 14,
     paddingHorizontal: 16,
@@ -543,7 +587,7 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     paddingVertical: 16,
-    color: '#111',
+    color: '#ffffff',
     fontSize: 16,
   },
   eyeIcon: {
@@ -569,14 +613,16 @@ const styles = StyleSheet.create({
   summaryBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f7f8fa',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
     borderRadius: 10,
     padding: 12,
     marginBottom: 20,
     gap: 10,
   },
   summaryText: {
-    color: '#333',
+    color: 'rgba(255,255,255,0.9)',
     fontSize: 14,
     flex: 1,
   },
@@ -591,7 +637,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   terms: {
-    color: '#666',
+    color: 'rgba(255,255,255,0.7)',
     fontSize: 13,
     textAlign: 'center',
     marginTop: 20,
@@ -606,7 +652,7 @@ const styles = StyleSheet.create({
     marginTop: 24,
   },
   signinText: {
-    color: '#666',
+    color: 'rgba(255,255,255,0.8)',
     fontSize: 15,
   },
   signinLink: {
