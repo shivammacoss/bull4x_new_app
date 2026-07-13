@@ -1733,13 +1733,27 @@ const TradingProvider = ({ children, navigation, route }) => {
     const openPrice = trade.openPrice || trade.open_price || 0;
     const quantity = trade.lots || trade.quantity || 0;
     const contractSize = trade.contract_size || trade.contractSize || 100000;
-    const rawPnlUsd = side === 'BUY'
+    // Raw P&L is in the instrument's QUOTE currency.
+    let pnl = side === 'BUY'
       ? (currentPrice - openPrice) * quantity * contractSize
       : (openPrice - currentPrice) * quantity * contractSize;
-    // Convert the price P&L into the account currency (INR accounts: × fx rate).
-    // Commission/swap are already stored in the account currency by the backend.
-    const pnl = rawPnlUsd * (Number(acctFxRate) || 1);
-    return pnl - (trade.commission || 0) - (trade.swap || 0);
+    // Step 1 — quote currency → USD, matching backend quote_to_account_pnl and
+    // the web trader. For USD-base pairs (USDJPY, USDCHF, USDCAD…) divide by the
+    // current price; USD-quoted pairs (EURUSD, XAUUSD, BTCUSD…) and cross pairs
+    // are left as-is. Currency is derived from the symbol when metadata is
+    // absent (the same fallback the web store uses).
+    const sym = String(trade.symbol || '').trim().toUpperCase();
+    const base = (trade.base_currency || (sym.length >= 6 ? sym.slice(0, 3) : '')).toUpperCase();
+    const quote = (trade.quote_currency || (sym.length >= 6 ? sym.slice(3, 6) : '')).toUpperCase();
+    if (quote && quote !== 'USD' && base === 'USD' && currentPrice) {
+      pnl = pnl / currentPrice;
+    }
+    // Step 2 — USD → account currency (INR accounts: × fx rate; USD: × 1).
+    pnl = pnl * (Number(acctFxRate) || 1);
+    // GROSS floating P&L to match the web + chart. Commission/swap are tracked
+    // separately in the balance; subtracting them here (the old behaviour) made
+    // the mobile figure disagree with both the web and the closed-trade P&L.
+    return pnl;
   };
 
   // Use useMemo for real-time values to avoid infinite loops
