@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Bull4x",
-    "slug": "intrendfx",
+    "slug": "bull4x",
     "version": "1.0.0",
     "runtimeVersion": "1.0.0",
     "orientation": "portrait",
@@ -21,8 +21,7 @@
     },
     "updates": {
       "enabled": true,
-      "fallbackToCacheTimeout": 3000,
-      "url": "https://u.expo.dev/18a4781c-095d-487a-9319-86954814067f"
+      "fallbackToCacheTimeout": 3000
     },
     "ios": {
       "supportsTablet": true,
@@ -70,9 +69,7 @@
     ],
     "owner": "shivam92388",
     "extra": {
-      "eas": {
-        "projectId": "18a4781c-095d-487a-9319-86954814067f"
-      }
+      "eas": {}
     }
   }
 }
