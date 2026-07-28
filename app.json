@@ -69,7 +69,9 @@
     ],
     "owner": "shivam92388",
     "extra": {
-      "eas": {}
+      "eas": {
+        "projectId": "4788292b-7387-4f84-899d-6c3b4a4d34e1"
+      }
     }
   }
 }
