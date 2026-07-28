@@ -10,11 +10,11 @@
     "newArchEnabled": true,
     "jsEngine": "hermes",
     "splash": {
-      "image": "./assets/intrendfx-logo.png",
+      "image": "./assets/bull4x-logo.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff",
       "dark": {
-        "image": "./assets/intrendfx-logo.png",
+        "image": "./assets/bull4x-logo.png",
         "resizeMode": "contain",
         "backgroundColor": "#ffffff"
       }
@@ -49,18 +49,18 @@
       "edgeToEdgeEnabled": true,
       "package": "com.intrendfx.app",
       "splash": {
-        "image": "./assets/intrendfx-logo.png",
+        "image": "./assets/bull4x-logo.png",
         "resizeMode": "contain",
         "backgroundColor": "#ffffff",
         "dark": {
-          "image": "./assets/intrendfx-logo.png",
+          "image": "./assets/bull4x-logo.png",
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
       }
     },
     "web": {
-      "favicon": "./assets/intrendfx-favicon.png"
+      "favicon": "./assets/bull4x-favicon.png"
     },
     "plugins": [
       "expo-font",

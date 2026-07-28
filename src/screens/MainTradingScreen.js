@@ -87,7 +87,7 @@ function getChartDataSource(symbol) {
 // empty /bars response would leave the chart with only the live forming
 // candle. The web trader solves this by generating deterministic synthetic
 // candles anchored to the current live price (see
-// intrendfx/frontend/trader/src/lib/charting/datafeed.ts). We do the same here
+// bull4x/frontend/trader/src/lib/charting/datafeed.ts). We do the same here
 // so the chart always renders a full history. Times are in UNIX seconds to
 // match the lightweight-charts series used below.
 const SYNTH_CRYPTO = new Set([
@@ -157,7 +157,7 @@ function generateSyntheticBars(symbolU, mid, spread, resSec, count) {
 // Bootstrap script for the in-WebView chart (TradingView Charting Library).
 // Hosts the chart that web uses, with custom datafeed, broker_factory, and
 // the same entry/SL/TP horizontal_line overlay logic as
-// intrendfx/frontend/trader/src/components/charts/ChartPositionOverlay.tsx.
+// bull4x/frontend/trader/src/components/charts/ChartPositionOverlay.tsx.
 //
 // Loaded with baseUrl = https://bull4x.com/, so /charting_library/ resolves
 // to the production server where the library is already hosted.
@@ -171,7 +171,7 @@ const CHART_BOOTSTRAP_JS = String.raw`
     } catch (e) {}
   }
 
-  var cfg = window.INTRENDFX_CONFIG || {};
+  var cfg = window.BULL4X_CONFIG || {};
   var SYMBOL    = String(cfg.symbol    || 'EURUSD').toUpperCase();
   var INTERVAL  = String(cfg.interval  || '5');
   var THEME     = (cfg.isDark ? 'Dark' : 'Light');
@@ -456,8 +456,8 @@ const CHART_BOOTSTRAP_JS = String.raw`
   if (WS_URL) connectWS();
 
   // Allow the RN side to push ticks too (fallback if WS is gated by network).
-  window.INTRENDFX_API = window.INTRENDFX_API || {};
-  window.INTRENDFX_API.setLiveTick = function (symbol, bid, ask) {
+  window.BULL4X_API = window.BULL4X_API || {};
+  window.BULL4X_API.setLiveTick = function (symbol, bid, ask) {
     var sym = String(symbol || '').toUpperCase();
     var b = +bid, a = +ask;
     var mid = (b && a) ? (b + a) / 2 : (b || a);
@@ -471,7 +471,7 @@ const CHART_BOOTSTRAP_JS = String.raw`
   var _positions = [];   // pushed from RN
   var _orders    = [];
 
-  window.INTRENDFX_API.setPositions = function (list, orders) {
+  window.BULL4X_API.setPositions = function (list, orders) {
     _positions = Array.isArray(list) ? list : [];
     _orders    = Array.isArray(orders) ? orders : _orders;
     pushPositionUpdates();
@@ -840,9 +840,9 @@ const CHART_BOOTSTRAP_JS = String.raw`
 
       function applyTo(doc) {
         if (!doc || !doc.head) return;
-        if (doc.getElementById('intrendfx-tv-light-css')) return;
+        if (doc.getElementById('bull4x-tv-light-css')) return;
         var s = doc.createElement('style');
-        s.id = 'intrendfx-tv-light-css';
+        s.id = 'bull4x-tv-light-css';
         s.textContent = css;
         doc.head.appendChild(s);
       }
@@ -885,22 +885,22 @@ const CHART_BOOTSTRAP_JS = String.raw`
   }
 
   // ── PUBLIC API for the React-Native side ─────────────────────────────
-  window.INTRENDFX_API.setSymbol = function (sym) {
+  window.BULL4X_API.setSymbol = function (sym) {
     SYMBOL = String(sym || '').toUpperCase();
     if (widgetRef && chartReady) {
       try { widgetRef.activeChart().setSymbol(SYMBOL); } catch (e) {}
     }
     syncOverlay();
   };
-  window.INTRENDFX_API.setInterval = function (i) {
+  window.BULL4X_API.setInterval = function (i) {
     INTERVAL = String(i || '5');
     if (widgetRef && chartReady) {
       try { widgetRef.activeChart().setResolution(INTERVAL); } catch (e) {}
     }
   };
-  window.INTRENDFX_API.setToken = function (t) { TOKEN = String(t || ''); };
-  window.INTRENDFX_API.setAccount = function (a) { ACCOUNT = a || null; };
-  window.INTRENDFX_API.refresh = function () { try { syncOverlay(); } catch (e) {} };
+  window.BULL4X_API.setToken = function (t) { TOKEN = String(t || ''); };
+  window.BULL4X_API.setAccount = function (a) { ACCOUNT = a || null; };
+  window.BULL4X_API.refresh = function () { try { syncOverlay(); } catch (e) {} };
 
   // Listen for posted messages too (alt path).
   function onMessage(event) {
@@ -908,10 +908,10 @@ const CHART_BOOTSTRAP_JS = String.raw`
     if (typeof data !== 'string') return;
     try {
       var msg = JSON.parse(data);
-      if (msg && msg.type === 'positions') window.INTRENDFX_API.setPositions(msg.list, msg.orders);
-      else if (msg && msg.type === 'tick') window.INTRENDFX_API.setLiveTick(msg.symbol, msg.bid, msg.ask);
-      else if (msg && msg.type === 'symbol') window.INTRENDFX_API.setSymbol(msg.symbol);
-      else if (msg && msg.type === 'token') window.INTRENDFX_API.setToken(msg.token);
+      if (msg && msg.type === 'positions') window.BULL4X_API.setPositions(msg.list, msg.orders);
+      else if (msg && msg.type === 'tick') window.BULL4X_API.setLiveTick(msg.symbol, msg.bid, msg.ask);
+      else if (msg && msg.type === 'symbol') window.BULL4X_API.setSymbol(msg.symbol);
+      else if (msg && msg.type === 'token') window.BULL4X_API.setToken(msg.token);
     } catch (e) {}
   }
   document.addEventListener('message', onMessage);
@@ -2288,7 +2288,7 @@ const HomeTab = ({ navigation }) => {
         {/* Logo — non-interactive */}
         <View style={{ padding: 4 }}>
           <Image
-            source={require('../../assets/intrendfx-icon.png')}
+            source={require('../../assets/bull4x-icon.png')}
             style={{ width: 48, height: 48, borderRadius: 10 }}
             resizeMode="contain"
           />
@@ -3353,7 +3353,7 @@ const HomeTab = ({ navigation }) => {
             >
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                 <Image
-                  source={require('../../assets/intrendfx-icon.png')}
+                  source={require('../../assets/bull4x-icon.png')}
                   style={{ width: 28, height: 28, borderRadius: 6 }}
                   resizeMode="contain"
                 />

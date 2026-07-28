@@ -1,4 +1,4 @@
-// Synced from intrendfx/frontend/trader/src/data/academy.ts so the mobile
+// Synced from bull4x/frontend/trader/src/data/academy.ts so the mobile
 // Academy screen shows the same phases, modules, and quiz content as the
 // web trader app. Keep this file in lockstep with the web source.
 export const phases = [
