@@ -39,7 +39,7 @@
           }
         }
       },
-      "bundleIdentifier": "com.intrendfx.app"
+      "bundleIdentifier": "com.bull4x.app"
     },
     "android": {
       "adaptiveIcon": {
@@ -47,7 +47,7 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.intrendfx.app",
+      "package": "com.bull4x.app",
       "splash": {
         "image": "./assets/bull4x-logo.png",
         "resizeMode": "contain",
